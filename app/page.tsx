@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import LoginForm from '@/components/LoginForm'
 import AnalysisForm from '@/components/AnalysisForm'
 import ProgressLog, { ProgressEvent } from '@/components/ProgressLog'
 import SummaryDashboard from '@/components/SummaryDashboard'
@@ -20,6 +21,8 @@ interface Summary {
 }
 
 export default function Home() {
+  const [loggedIn, setLoggedIn] = useState(false)
+  const [checkingAuth, setCheckingAuth] = useState(true)
   const [isRunning, setIsRunning] = useState(false)
   const [events, setEvents] = useState<ProgressEvent[]>([])
   const [rows, setRows] = useState<MentionRow[]>([])
@@ -30,25 +33,31 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'all' | 'gaps'>('all')
   const eventSourceRef = useRef<EventSource | null>(null)
 
-  const handleSubmit = useCallback((domain: string, keywords: string[]) => {
+  useEffect(() => {
+    // Check if session cookie is valid by hitting a protected route
+    fetch('/api/analyze?domain=_ping&keywords=_ping')
+      .then((res) => {
+        if (res.status !== 401) setLoggedIn(true)
+      })
+      .catch(() => {})
+      .finally(() => setCheckingAuth(false))
+  }, [])
+
+  const handleSubmit = useCallback((dom: string, keywords: string[]) => {
     setIsRunning(true)
     setEvents([])
     setRows([])
     setSummary(null)
     setCsvData(null)
     setError(null)
-    setDomain(domain)
+    setDomain(dom)
     setActiveTab('all')
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
     }
 
-    const params = new URLSearchParams({
-      domain,
-      keywords: keywords.join('\n'),
-    })
-
+    const params = new URLSearchParams({ domain: dom, keywords: keywords.join('\n') })
     const es = new EventSource(`/api/analyze?${params}`)
     eventSourceRef.current = es
 
@@ -86,10 +95,21 @@ export default function Home() {
     }
   }, [])
 
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!loggedIn) {
+    return <LoginForm onLogin={() => setLoggedIn(true)} />
+  }
+
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold">
             <span className="text-lime-400">ProGrowth</span> AI Overview
@@ -99,9 +119,7 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Layout: Form + Results */}
         <div className="grid grid-cols-1 lg:grid-cols-[350px_1fr] gap-8">
-          {/* Left: Form */}
           <div className="space-y-6">
             <AnalysisForm onSubmit={handleSubmit} isRunning={isRunning} />
             <ProgressLog events={events} />
@@ -112,7 +130,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Right: Results */}
           <div className="space-y-6">
             {summary && (
               <>
