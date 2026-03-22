@@ -1,24 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
-import crypto from 'crypto'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'progrowth-ai-overview-secret-2026'
 
-function verifyToken(token: string): boolean {
+async function verifyToken(token: string): Promise<boolean> {
   try {
     const [data, sig] = token.split('.')
-    const expectedSig = crypto
-      .createHmac('sha256', JWT_SECRET)
-      .update(data)
-      .digest('base64url')
+    const encoder = new TextEncoder()
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    )
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data))
+    const expectedSig = btoa(String.fromCharCode(...new Uint8Array(signature)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
     if (sig !== expectedSig) return false
-    const payload = JSON.parse(Buffer.from(data, 'base64url').toString())
+    const payload = JSON.parse(atob(data.replace(/-/g, '+').replace(/_/g, '/')))
     return payload.exp > Math.floor(Date.now() / 1000)
   } catch {
     return false
   }
 }
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
   // Allow auth API routes without session
@@ -28,7 +36,7 @@ export function middleware(req: NextRequest) {
 
   // Check session cookie
   const session = req.cookies.get('session')?.value
-  if (session && verifyToken(session)) {
+  if (session && await verifyToken(session)) {
     return NextResponse.next()
   }
 
