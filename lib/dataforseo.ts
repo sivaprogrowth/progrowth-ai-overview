@@ -121,6 +121,50 @@ export async function fetchLlmResponse(
   ])
 }
 
+// ── Domain Discovery (Ranked Keywords) ──
+
+export async function fetchRankedKeywords(
+  domain: string,
+  limit = 30
+): Promise<Array<{ keyword: string; search_volume: number; position: number }>> {
+  const response = await dfsPost('/dataforseo_labs/google/ranked_keywords/live', [
+    {
+      target: domain,
+      language_code: 'en',
+      location_name: 'United States',
+      limit,
+      item_types: ['organic'],
+      order_by: ['keyword_data.keyword_info.search_volume,desc'],
+      filters: [['keyword_data.keyword_info.search_volume', '>', 20]],
+    },
+  ])
+
+  const items = response?.tasks?.[0]?.result?.[0]?.items || []
+
+  return items.map((item: any) => ({
+    keyword: item.keyword_data?.keyword || '',
+    search_volume: item.keyword_data?.keyword_info?.search_volume || 0,
+    position: item.ranked_serp_element?.serp_item?.rank_absolute || 0,
+  })).filter((k: any) => k.keyword.length > 0)
+}
+
+export function filterDiscoveredKeywords(
+  keywords: Array<{ keyword: string; search_volume: number; position: number }>,
+  domain: string
+): string[] {
+  const domainParts = domain.toLowerCase().replace(/\.(com|net|org|io|services|co)$/, '').split('.')
+
+  return keywords
+    .filter((k) => {
+      const kw = k.keyword.toLowerCase()
+      if (kw.split(/\s+/).length < 2) return false
+      if (domainParts.some((part) => kw.includes(part) && part.length > 3)) return false
+      if (kw.includes('http') || kw.includes('.com') || kw.includes('.org')) return false
+      return true
+    })
+    .map((k) => k.keyword)
+}
+
 export const LLM_MODELS = {
   perplexity: 'sonar',
   claude: 'claude-haiku-4-5',

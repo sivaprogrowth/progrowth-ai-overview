@@ -42,7 +42,7 @@ export default function Home() {
       .finally(() => setCheckingAuth(false))
   }, [])
 
-  const handleSubmit = useCallback((dom: string, keywords: string[]) => {
+  const handleSubmit = useCallback((dom: string, keywords: string[], mode: 'keywords' | 'discovery') => {
     setIsRunning(true)
     setEvents([])
     setRows([])
@@ -56,7 +56,7 @@ export default function Home() {
       eventSourceRef.current.close()
     }
 
-    const params = new URLSearchParams({ domain: dom, keywords: keywords.join('\n') })
+    const params = new URLSearchParams({ domain: dom, keywords: keywords.join('\n'), mode })
     const es = new EventSource(`/api/analyze?${params}`)
     eventSourceRef.current = es
 

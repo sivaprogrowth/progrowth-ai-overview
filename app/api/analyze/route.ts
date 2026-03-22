@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server'
 import {
   fetchMentionSearch,
   fetchLlmResponse,
+  fetchRankedKeywords,
+  filterDiscoveredKeywords,
   LLM_MODELS,
 } from '@/lib/dataforseo'
 import {
@@ -31,20 +33,16 @@ export async function GET(req: NextRequest) {
   const email = getEmailFromSession(req)
   const domain = req.nextUrl.searchParams.get('domain')?.trim()
   const keywordsParam = req.nextUrl.searchParams.get('keywords')?.trim()
+  const mode = req.nextUrl.searchParams.get('mode') || 'keywords'
 
-  if (!domain || !keywordsParam) {
-    return new Response(JSON.stringify({ error: 'domain and keywords are required' }), {
+  if (!domain) {
+    return new Response(JSON.stringify({ error: 'domain is required' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  const keywords = keywordsParam
-    .split('\n')
-    .map((k) => k.trim())
-    .filter(Boolean)
-
-  if (keywords.length === 0) {
+  if (mode === 'keywords' && (!keywordsParam || keywordsParam.trim().length === 0)) {
     return new Response(JSON.stringify({ error: 'At least one keyword is required' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
@@ -61,6 +59,46 @@ export async function GET(req: NextRequest) {
       }
 
       try {
+        const isDiscovery = mode === 'discovery'
+        const totalSteps = isDiscovery ? 5 : 4
+        const stepOffset = isDiscovery ? 1 : 0
+        let keywords: string[]
+
+        if (isDiscovery) {
+          // ── Step 1: Discover top keywords ──
+          send('progress', {
+            step: 1,
+            total: totalSteps,
+            message: `Discovering top keywords for ${domain}...`,
+          })
+
+          const rawKeywords = await fetchRankedKeywords(domain, 30)
+          keywords = filterDiscoveredKeywords(rawKeywords, domain).slice(0, 20)
+
+          if (keywords.length === 0) {
+            send('error', { message: `No rankable keywords found for ${domain}. Try entering keywords manually.` })
+            controller.close()
+            return
+          }
+
+          send('progress', {
+            step: 1,
+            total: totalSteps,
+            message: `Found ${keywords.length} keywords: ${keywords.slice(0, 3).join(', ')}${keywords.length > 3 ? '...' : ''}`,
+          })
+        } else {
+          keywords = keywordsParam!
+            .split('\n')
+            .map((k) => k.trim())
+            .filter(Boolean)
+
+          if (keywords.length === 0) {
+            send('error', { message: 'At least one keyword is required' })
+            controller.close()
+            return
+          }
+        }
+
         // Build keyword targets for LLM Mentions API
         const keywordTargets = keywords.map((kw) => ({
           keyword: kw,
@@ -68,20 +106,20 @@ export async function GET(req: NextRequest) {
           search_scope: ['any' as const],
         }))
 
-        // ── Step 1: LLM Mentions — Google AI Overviews + ChatGPT (bulk, fast) ──
+        // ── Step 2 (or 1): LLM Mentions — Google AI Overviews + ChatGPT (bulk, fast) ──
         send('progress', {
-          step: 1,
-          total: 4,
+          step: 1 + stepOffset,
+          total: totalSteps,
           message: `Scanning Google AI Overviews & ChatGPT for ${keywords.length} keywords (bulk)...`,
         })
 
         const [googleRes, chatgptRes] = await Promise.all([
           fetchMentionSearch(keywordTargets, 'google', 200).catch((e) => {
-            send('progress', { step: 1, total: 4, message: `Google API error: ${e.message}` })
+            send('progress', { step: 1 + stepOffset, total: totalSteps, message: `Google API error: ${e.message}` })
             return null
           }),
           fetchMentionSearch(keywordTargets, 'chat_gpt', 200).catch((e) => {
-            send('progress', { step: 1, total: 4, message: `ChatGPT API error: ${e.message}` })
+            send('progress', { step: 1 + stepOffset, total: totalSteps, message: `ChatGPT API error: ${e.message}` })
             return null
           }),
         ])
@@ -93,15 +131,15 @@ export async function GET(req: NextRequest) {
         const chatgptCount = Array.from(chatgptMap.values()).filter((m) => m.domainFound).length
 
         send('progress', {
-          step: 1,
-          total: 4,
+          step: 1 + stepOffset,
+          total: totalSteps,
           message: `Google AI Overviews: ${googleCount}/${keywords.length} | ChatGPT: ${chatgptCount}/${keywords.length}`,
         })
 
-        // ── Step 2: Perplexity (live queries) ──
+        // ── Step 3 (or 2): Perplexity (live queries) ──
         send('progress', {
-          step: 2,
-          total: 4,
+          step: 2 + stepOffset,
+          total: totalSteps,
           message: `Querying Perplexity for ${keywords.length} keywords...`,
         })
 
@@ -110,8 +148,8 @@ export async function GET(req: NextRequest) {
         for (let i = 0; i < keywords.length; i += batchSize) {
           const batch = keywords.slice(i, i + batchSize)
           send('progress', {
-            step: 2,
-            total: 4,
+            step: 2 + stepOffset,
+            total: totalSteps,
             message: `Perplexity (${Math.min(i + batchSize, keywords.length)}/${keywords.length})...`,
           })
 
@@ -130,15 +168,15 @@ export async function GET(req: NextRequest) {
 
         const perplexityCount = Array.from(perplexityMap.values()).filter((m) => m.found).length
         send('progress', {
-          step: 2,
-          total: 4,
+          step: 2 + stepOffset,
+          total: totalSteps,
           message: `Perplexity: ${perplexityCount}/${keywords.length}`,
         })
 
-        // ── Step 3: Claude (live queries) ──
+        // ── Step 4 (or 3): Claude (live queries) ──
         send('progress', {
-          step: 3,
-          total: 4,
+          step: 3 + stepOffset,
+          total: totalSteps,
           message: `Querying Claude for ${keywords.length} keywords...`,
         })
 
@@ -146,8 +184,8 @@ export async function GET(req: NextRequest) {
         for (let i = 0; i < keywords.length; i += batchSize) {
           const batch = keywords.slice(i, i + batchSize)
           send('progress', {
-            step: 3,
-            total: 4,
+            step: 3 + stepOffset,
+            total: totalSteps,
             message: `Claude (${Math.min(i + batchSize, keywords.length)}/${keywords.length})...`,
           })
 
@@ -166,15 +204,15 @@ export async function GET(req: NextRequest) {
 
         const claudeCount = Array.from(claudeMap.values()).filter((m) => m.found).length
         send('progress', {
-          step: 3,
-          total: 4,
+          step: 3 + stepOffset,
+          total: totalSteps,
           message: `Claude: ${claudeCount}/${keywords.length}`,
         })
 
-        // ── Step 4: Compile results ──
+        // ── Step 5 (or 4): Compile results ──
         send('progress', {
-          step: 4,
-          total: 4,
+          step: 4 + stepOffset,
+          total: totalSteps,
           message: 'Compiling results...',
         })
 
