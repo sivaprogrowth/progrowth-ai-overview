@@ -7,7 +7,8 @@ import ProgressLog, { ProgressEvent } from '@/components/ProgressLog'
 import SummaryDashboard from '@/components/SummaryDashboard'
 import ResultsTable from '@/components/ResultsTable'
 import DownloadButton from '@/components/DownloadButton'
-import { MentionRow } from '@/lib/transform'
+import DeepDiveView from '@/components/DeepDiveView'
+import { MentionRow, DeepDiveResult } from '@/lib/transform'
 import { generateCSV } from '@/lib/csv'
 
 interface Summary {
@@ -31,10 +32,10 @@ export default function Home() {
   const [domain, setDomain] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'all' | 'gaps'>('all')
+  const [deepDiveResult, setDeepDiveResult] = useState<DeepDiveResult | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
-    // Check if session cookie is valid via dedicated auth endpoint
     fetch('/api/auth/check')
       .then((res) => res.json())
       .then((data) => setLoggedIn(data.authenticated === true))
@@ -42,7 +43,7 @@ export default function Home() {
       .finally(() => setCheckingAuth(false))
   }, [])
 
-  const handleSubmit = useCallback((dom: string, keywords: string[], mode: 'keywords' | 'discovery') => {
+  const handleSubmit = useCallback((dom: string, keywords: string[], mode: 'keywords' | 'discovery' | 'deepdive') => {
     setIsRunning(true)
     setEvents([])
     setRows([])
@@ -51,6 +52,7 @@ export default function Home() {
     setError(null)
     setDomain(dom)
     setActiveTab('all')
+    setDeepDiveResult(null)
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -68,9 +70,13 @@ export default function Home() {
 
     es.addEventListener('complete', (e) => {
       const data = JSON.parse(e.data)
-      setRows(data.rows)
-      setSummary(data.summary)
-      setCsvData(generateCSV(data.rows))
+      if (data.deepdive) {
+        setDeepDiveResult(data.deepdive)
+      } else {
+        setRows(data.rows)
+        setSummary(data.summary)
+        setCsvData(generateCSV(data.rows))
+      }
       setIsRunning(false)
       es.close()
     })
@@ -130,15 +136,21 @@ export default function Home() {
           </div>
 
           <div className="space-y-6">
-            {summary && (
+            {deepDiveResult ? (
+              <DeepDiveView result={deepDiveResult} />
+            ) : (
               <>
-                <SummaryDashboard summary={summary} />
-                <div className="flex justify-end">
-                  <DownloadButton csvData={csvData} domain={domain} />
-                </div>
+                {summary && (
+                  <>
+                    <SummaryDashboard summary={summary} />
+                    <div className="flex justify-end">
+                      <DownloadButton csvData={csvData} domain={domain} />
+                    </div>
+                  </>
+                )}
+                <ResultsTable rows={rows} activeTab={activeTab} onTabChange={setActiveTab} />
               </>
             )}
-            <ResultsTable rows={rows} activeTab={activeTab} onTabChange={setActiveTab} />
           </div>
         </div>
       </div>

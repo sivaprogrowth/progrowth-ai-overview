@@ -12,6 +12,10 @@ import {
   parseLlmResponseResult,
   transformToRows,
   PlatformResult,
+  parseDeepDiveMention,
+  parseDeepDiveLlmResponse,
+  DeepDivePlatformResponse,
+  DeepDiveResult,
 } from '@/lib/transform'
 import { supabase } from '@/lib/supabase'
 
@@ -36,8 +40,15 @@ export async function GET(req: NextRequest) {
   const keywordsParam = req.nextUrl.searchParams.get('keywords')?.trim()
   const mode = req.nextUrl.searchParams.get('mode') || 'keywords'
 
-  if (!domain) {
+  if (mode !== 'deepdive' && !domain) {
     return new Response(JSON.stringify({ error: 'domain is required' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (mode === 'deepdive' && (!keywordsParam || keywordsParam.trim().length === 0)) {
+    return new Response(JSON.stringify({ error: 'Query is required for deep dive' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -60,6 +71,55 @@ export async function GET(req: NextRequest) {
       }
 
       try {
+        // ── Deep Dive mode: fetch full AI responses for a single query ──
+        if (mode === 'deepdive') {
+          const query = keywordsParam!.trim()
+          const platforms: DeepDivePlatformResponse[] = []
+
+          send('progress', { step: 1, total: 4, message: 'Fetching Google AI Overview response...' })
+          try {
+            const res = await fetchMentionSearch(
+              [{ keyword: query, match_type: 'partial_match' as const, search_scope: ['any' as const] }],
+              'google', 10
+            )
+            platforms.push(parseDeepDiveMention(res, domain || null, 'google'))
+          } catch {
+            platforms.push({ platform: 'google', answer: '', sources: [], domainMentioned: false, error: 'Failed to fetch' })
+          }
+
+          send('progress', { step: 2, total: 4, message: 'Fetching ChatGPT response...' })
+          try {
+            const res = await fetchMentionSearch(
+              [{ keyword: query, match_type: 'partial_match' as const, search_scope: ['any' as const] }],
+              'chat_gpt', 10
+            )
+            platforms.push(parseDeepDiveMention(res, domain || null, 'chatgpt'))
+          } catch {
+            platforms.push({ platform: 'chatgpt', answer: '', sources: [], domainMentioned: false, error: 'Failed to fetch' })
+          }
+
+          send('progress', { step: 3, total: 4, message: 'Querying Perplexity live...' })
+          try {
+            const res = await fetchLlmResponse(query, 'perplexity', LLM_MODELS.perplexity, query)
+            platforms.push(parseDeepDiveLlmResponse(res, domain || null, 'perplexity'))
+          } catch {
+            platforms.push({ platform: 'perplexity', answer: '', sources: [], domainMentioned: false, error: 'Failed to fetch' })
+          }
+
+          send('progress', { step: 4, total: 4, message: 'Querying Claude live...' })
+          try {
+            const res = await fetchLlmResponse(query, 'claude', LLM_MODELS.claude, query)
+            platforms.push(parseDeepDiveLlmResponse(res, domain || null, 'claude'))
+          } catch {
+            platforms.push({ platform: 'claude', answer: '', sources: [], domainMentioned: false, error: 'Failed to fetch' })
+          }
+
+          const result: DeepDiveResult = { query, domain: domain || null, platforms }
+          send('complete', { deepdive: result })
+          controller.close()
+          return
+        }
+
         const isDiscovery = mode === 'discovery'
         const totalSteps = isDiscovery ? 5 : 4
         const stepOffset = isDiscovery ? 1 : 0
@@ -73,8 +133,8 @@ export async function GET(req: NextRequest) {
             message: `Discovering top keywords for ${domain}...`,
           })
 
-          const rawKeywords = await fetchRankedKeywords(domain, 20)
-          keywords = filterDiscoveredKeywords(rawKeywords, domain).slice(0, 8)
+          const rawKeywords = await fetchRankedKeywords(domain!, 20)
+          keywords = filterDiscoveredKeywords(rawKeywords, domain!).slice(0, 8)
 
           if (keywords.length === 0) {
             send('error', { message: `No rankable keywords found for ${domain}. Try entering keywords manually.` })
@@ -157,8 +217,8 @@ export async function GET(req: NextRequest) {
         const googleMerged = mergeResponses(googleResults)
         const chatgptMerged = mergeResponses(chatgptResults)
         // Parse with all mentionKeywords so core phrase queries get assigned to closest original keyword
-        const googleMap = parseMentionSearch(googleMerged, domain, mentionKeywords)
-        const chatgptMap = parseMentionSearch(chatgptMerged, domain, mentionKeywords)
+        const googleMap = parseMentionSearch(googleMerged, domain!, mentionKeywords)
+        const chatgptMap = parseMentionSearch(chatgptMerged, domain!, mentionKeywords)
         // Merge core phrase results into their parent keywords
         for (const core of corePhrases) {
           const coreLower = core.toLowerCase()
@@ -226,7 +286,7 @@ export async function GET(req: NextRequest) {
             batch.map((kw) =>
               fetchLlmResponse(kw, 'perplexity', LLM_MODELS.perplexity)
                 .then((res) => {
-                  perplexityMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain))
+                  perplexityMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain!))
                 })
                 .catch(() => {
                   perplexityMap.set(kw.toLowerCase(), { found: false, position: null, snippet: null, citedUrls: [] })
@@ -262,7 +322,7 @@ export async function GET(req: NextRequest) {
             batch.map((kw) =>
               fetchLlmResponse(kw, 'claude', LLM_MODELS.claude)
                 .then((res) => {
-                  claudeMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain))
+                  claudeMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain!))
                 })
                 .catch(() => {
                   claudeMap.set(kw.toLowerCase(), { found: false, position: null, snippet: null, citedUrls: [] })
@@ -285,7 +345,7 @@ export async function GET(req: NextRequest) {
           message: 'Compiling results...',
         })
 
-        const rows = transformToRows(keywords, domain, {
+        const rows = transformToRows(keywords, domain!, {
           google: googleMap,
           chatgpt: chatgptMap,
           perplexity: perplexityMap,

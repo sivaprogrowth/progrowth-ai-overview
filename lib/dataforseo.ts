@@ -108,9 +108,10 @@ export async function fetchKeywordVolume(keywords: string[]) {
 export async function fetchLlmResponse(
   keyword: string,
   llmType: 'perplexity' | 'claude',
-  modelName: string
+  modelName: string,
+  customPrompt?: string
 ) {
-  const prompt = `What are the best companies and websites for "${keyword}"? List specific company names, their website URLs, and briefly explain why each is recommended.`
+  const prompt = customPrompt || `What are the best companies and websites for "${keyword}"? List specific company names, their website URLs, and briefly explain why each is recommended.`
   return dfsPost(`/ai_optimization/${llmType}/llm_responses/live`, [
     {
       llm_type: llmType,

@@ -365,3 +365,100 @@ function extractDomain(url: string): string {
     return ''
   }
 }
+
+// ── Deep Dive types and parsers ──
+
+export interface DeepDiveSource {
+  domain: string
+  url: string
+  title: string | null
+  isUserDomain: boolean
+}
+
+export interface DeepDivePlatformResponse {
+  platform: 'google' | 'chatgpt' | 'perplexity' | 'claude'
+  answer: string
+  sources: DeepDiveSource[]
+  domainMentioned: boolean
+  error: string | null
+}
+
+export interface DeepDiveResult {
+  query: string
+  domain: string | null
+  platforms: DeepDivePlatformResponse[]
+}
+
+export function parseDeepDiveMention(
+  response: any,
+  domain: string | null,
+  platform: 'google' | 'chatgpt'
+): DeepDivePlatformResponse {
+  const domainLower = domain?.toLowerCase().replace(/^www\./, '') || ''
+  const items = response?.tasks?.[0]?.result?.[0]?.items || []
+
+  if (items.length === 0) {
+    return { platform, answer: '', sources: [], domainMentioned: false, error: 'No cached response found' }
+  }
+
+  const parts: string[] = []
+  const allSources: DeepDiveSource[] = []
+  let domainMentioned = false
+
+  for (const item of items) {
+    if (item.question && item.answer) {
+      parts.push(`### ${item.question}\n\n${item.answer}`)
+    } else if (item.answer) {
+      parts.push(item.answer)
+    }
+
+    for (const s of (item.sources || [])) {
+      const sDomain = (s.domain || '').toLowerCase().replace(/^www\./, '')
+      const isUser = domainLower ? isDomainMatch(sDomain, domainLower) : false
+      if (isUser) domainMentioned = true
+      if (!allSources.find((e) => e.url === s.url)) {
+        allSources.push({ domain: sDomain, url: s.url, title: s.title || s.source_name || null, isUserDomain: isUser })
+      }
+    }
+
+    if (domainLower && (item.answer || '').toLowerCase().includes(domainLower)) {
+      domainMentioned = true
+    }
+  }
+
+  return { platform, answer: parts.join('\n\n---\n\n'), sources: allSources, domainMentioned, error: null }
+}
+
+export function parseDeepDiveLlmResponse(
+  response: any,
+  domain: string | null,
+  platform: 'perplexity' | 'claude'
+): DeepDivePlatformResponse {
+  const domainLower = domain?.toLowerCase().replace(/^www\./, '') || ''
+  const result = response?.tasks?.[0]?.result?.[0]
+  if (!result) return { platform, answer: '', sources: [], domainMentioned: false, error: 'No response' }
+
+  const sections = result.items?.[0]?.sections || []
+  const text = sections.map((s: any) => s.text || '').join('\n\n')
+  const annotations: any[] = sections.flatMap((s: any) => s.annotations || [])
+
+  const sources: DeepDiveSource[] = annotations
+    .filter((a: any) => a.url && !a.url.includes('vertexaisearch.cloud.google.com'))
+    .map((a: any) => {
+      const aDomain = extractDomain(a.url)
+      return {
+        domain: aDomain,
+        url: a.url,
+        title: a.title || null,
+        isUserDomain: domainLower ? isDomainMatch(aDomain, domainLower) : false,
+      }
+    })
+    .filter((s: DeepDiveSource) => s.domain.length > 0)
+
+  const unique = sources.filter((s, i) => sources.findIndex((e) => e.url === s.url) === i)
+  const domainMentioned = domainLower
+    ? text.toLowerCase().includes(domainLower) || unique.some((s) => s.isUserDomain)
+    : false
+
+  return { platform, answer: text, sources: unique, domainMentioned, error: null }
+}
