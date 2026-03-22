@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyOTP, createSessionToken } from '@/lib/auth'
+import { verifyOTPToken, createSessionToken } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, code } = await req.json()
+    const { email, code, otpToken } = await req.json()
 
-    if (!email || !code) {
-      return NextResponse.json({ error: 'Email and code are required' }, { status: 400 })
+    if (!email || !code || !otpToken) {
+      return NextResponse.json({ error: 'Email, code, and otpToken are required' }, { status: 400 })
     }
 
     const emailLower = email.toLowerCase().trim()
 
-    if (!verifyOTP(emailLower, code)) {
+    if (!verifyOTPToken(otpToken, emailLower, code)) {
       return NextResponse.json({ error: 'Invalid or expired code' }, { status: 401 })
     }
 

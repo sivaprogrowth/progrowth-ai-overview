@@ -9,6 +9,7 @@ interface Props {
 export default function LoginForm({ onLogin }: Props) {
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
+  const [otpToken, setOtpToken] = useState('')
   const [step, setStep] = useState<'email' | 'otp'>('email')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -31,6 +32,7 @@ export default function LoginForm({ onLogin }: Props) {
         return
       }
 
+      setOtpToken(data.otpToken)
       setStep('otp')
     } catch {
       setError('Network error. Please try again.')
@@ -48,7 +50,7 @@ export default function LoginForm({ onLogin }: Props) {
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), code: code.trim() }),
+        body: JSON.stringify({ email: email.trim(), code: code.trim(), otpToken }),
       })
       const data = await res.json()
 

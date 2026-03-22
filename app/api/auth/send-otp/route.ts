@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import nodemailer from 'nodemailer'
-import { generateOTP, storeOTP } from '@/lib/auth'
+import { generateOTP, createOTPToken } from '@/lib/auth'
 
 const transporter = nodemailer.createTransport({
   host: 'smtp-relay.brevo.com',
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     }
 
     const code = generateOTP()
-    storeOTP(emailLower, code)
+    const otpToken = createOTPToken(emailLower, code)
 
     await transporter.sendMail({
       from: '"ProGrowth AI Overview" <siva@progrowth.services>',
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
       `,
     })
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, otpToken })
   } catch (error: any) {
     console.error('Send OTP error:', error)
     return NextResponse.json({ error: 'Failed to send code', detail: error?.message || String(error) }, { status: 500 })

@@ -37,9 +37,11 @@ export default function Home() {
     // Check if session cookie is valid by hitting a protected route
     fetch('/api/analyze?domain=_ping&keywords=_ping')
       .then((res) => {
-        if (res.status !== 401) setLoggedIn(true)
+        setLoggedIn(res.ok || (res.status !== 401 && res.status !== 403))
       })
-      .catch(() => {})
+      .catch(() => {
+        setLoggedIn(false)
+      })
       .finally(() => setCheckingAuth(false))
   }, [])
 
