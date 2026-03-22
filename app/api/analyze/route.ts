@@ -99,33 +99,51 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // Build keyword targets for LLM Mentions API
-        const keywordTargets = keywords.map((kw) => ({
-          keyword: kw,
-          match_type: 'partial_match' as const,
-          search_scope: ['any' as const],
-        }))
-
-        // ── Step 2 (or 1): LLM Mentions — Google AI Overviews + ChatGPT (bulk, fast) ──
+        // ── Step 2 (or 1): LLM Mentions — Google AI Overviews + ChatGPT (per keyword) ──
         send('progress', {
           step: 1 + stepOffset,
           total: totalSteps,
-          message: `Scanning Google AI Overviews & ChatGPT for ${keywords.length} keywords (bulk)...`,
+          message: `Scanning Google AI Overviews & ChatGPT for ${keywords.length} keywords...`,
         })
 
-        const [googleRes, chatgptRes] = await Promise.all([
-          fetchMentionSearch(keywordTargets, 'google', 200).catch((e) => {
-            send('progress', { step: 1 + stepOffset, total: totalSteps, message: `Google API error: ${e.message}` })
-            return null
-          }),
-          fetchMentionSearch(keywordTargets, 'chat_gpt', 200).catch((e) => {
-            send('progress', { step: 1 + stepOffset, total: totalSteps, message: `ChatGPT API error: ${e.message}` })
-            return null
-          }),
-        ])
+        // Call per keyword to avoid AND-logic issue with multi-target requests
+        const googleResults: any[] = []
+        const chatgptResults: any[] = []
+        const mentionBatchSize = 3
+        for (let i = 0; i < keywords.length; i += mentionBatchSize) {
+          const batch = keywords.slice(i, i + mentionBatchSize)
+          send('progress', {
+            step: 1 + stepOffset,
+            total: totalSteps,
+            message: `Google + ChatGPT (${Math.min(i + mentionBatchSize, keywords.length)}/${keywords.length})...`,
+          })
 
-        const googleMap = parseMentionSearch(googleRes, domain, keywords)
-        const chatgptMap = parseMentionSearch(chatgptRes, domain, keywords)
+          const calls = batch.flatMap((kw) => {
+            const target = [{ keyword: kw, match_type: 'partial_match' as const, search_scope: ['any' as const] }]
+            return [
+              fetchMentionSearch(target, 'google', 100).catch(() => null),
+              fetchMentionSearch(target, 'chat_gpt', 100).catch(() => null),
+            ]
+          })
+
+          const results = await Promise.all(calls)
+          for (let j = 0; j < batch.length; j++) {
+            googleResults.push(results[j * 2])
+            chatgptResults.push(results[j * 2 + 1])
+          }
+        }
+
+        // Merge all per-keyword results into combined maps
+        const googleMap = parseMentionSearch(null, domain, keywords)
+        const chatgptMap = parseMentionSearch(null, domain, keywords)
+        for (let i = 0; i < keywords.length; i++) {
+          const gMap = parseMentionSearch(googleResults[i], domain, [keywords[i]])
+          const cMap = parseMentionSearch(chatgptResults[i], domain, [keywords[i]])
+          const gResult = gMap.get(keywords[i].toLowerCase())
+          const cResult = cMap.get(keywords[i].toLowerCase())
+          if (gResult) googleMap.set(keywords[i].toLowerCase(), gResult)
+          if (cResult) chatgptMap.set(keywords[i].toLowerCase(), cResult)
+        }
 
         const googleCount = Array.from(googleMap.values()).filter((m) => m.domainFound).length
         const chatgptCount = Array.from(chatgptMap.values()).filter((m) => m.domainFound).length
