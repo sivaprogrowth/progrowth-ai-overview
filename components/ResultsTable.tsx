@@ -179,13 +179,16 @@ export default function ResultsTable({ rows, activeTab, onTabChange }: Props) {
                   <tr key={`queries-${i}`} className="bg-gray-900/80">
                     <td colSpan={11} className="px-6 py-3">
                       <div className="text-xs text-gray-400 mb-2 font-medium uppercase tracking-wide">
-                        People are asking ({row.queries.length} queries):
+                        People are asking in AI ({row.queries.length} queries, sorted by AI search volume):
                       </div>
                       <ul className="space-y-1">
                         {row.queries.map((q, qi) => (
                           <li key={qi} className="text-sm text-gray-300 flex items-start gap-2">
                             <span className="text-lime-500 mt-0.5 shrink-0">?</span>
-                            <span>{q}</span>
+                            <span className="flex-1">{q.question}</span>
+                            {q.volume && (
+                              <span className="text-xs text-gray-500 shrink-0 tabular-nums">{q.volume.toLocaleString()} vol</span>
+                            )}
                           </li>
                         ))}
                       </ul>

@@ -53,7 +53,7 @@ export function generateCSV(rows: MentionRow[]): string {
         row.competitor_3_page_url,
         row.content_gap ? 'YES' : 'NO',
         row.context_snippet,
-        row.queries.join(' | '),
+        row.queries.map((q) => q.volume ? `${q.question} (${q.volume})` : q.question).join(' | '),
       ]
         .map(escapeCSV)
         .join(',')

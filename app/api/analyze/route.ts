@@ -175,7 +175,7 @@ export async function GET(req: NextRequest) {
             const cParent = chatgptMap.get(parentLower)
             if (gCore && gParent) {
               for (const q of gCore.queries) {
-                if (!gParent.queries.includes(q)) gParent.queries.push(q)
+                if (!gParent.queries.some((eq) => eq.question === q.question)) gParent.queries.push(q)
               }
               if (!gParent.aiSearchVolume && gCore.aiSearchVolume) gParent.aiSearchVolume = gCore.aiSearchVolume
               for (const s of gCore.allSources) {
@@ -184,7 +184,7 @@ export async function GET(req: NextRequest) {
             }
             if (cCore && cParent) {
               for (const q of cCore.queries) {
-                if (!cParent.queries.includes(q)) cParent.queries.push(q)
+                if (!cParent.queries.some((eq) => eq.question === q.question)) cParent.queries.push(q)
               }
               for (const s of cCore.allSources) {
                 if (!cParent.allSources.find((es) => es.domain === s.domain)) cParent.allSources.push(s)

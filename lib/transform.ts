@@ -16,7 +16,7 @@ export interface MentionRow {
   competitor_3_page_url: string | null
   content_gap: boolean
   context_snippet: string | null
-  queries: string[]
+  queries: Array<{ question: string; volume: number | null }>
 }
 
 export interface PlatformResult {
@@ -106,11 +106,19 @@ export function transformToRows(
     const top3 = Array.from(allCompetitors.values()).slice(0, 3)
     const contentGap = platforms === 0 && top3.length > 0
 
-    // Collect unique queries from Google and ChatGPT mentions
-    const queries: string[] = []
+    // Collect unique queries from Google and ChatGPT mentions, sorted by AI volume
+    const queryMap = new Map<string, number | null>()
     for (const q of [...(google?.queries || []), ...(chatgpt?.queries || [])]) {
-      if (!queries.includes(q)) queries.push(q)
+      const existing = queryMap.get(q.question)
+      if (existing === undefined) {
+        queryMap.set(q.question, q.volume)
+      } else if (q.volume && (!existing || q.volume > existing)) {
+        queryMap.set(q.question, q.volume)
+      }
     }
+    const queries = Array.from(queryMap.entries())
+      .map(([question, volume]) => ({ question, volume }))
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0))
 
     return {
       keyword: kw,
@@ -144,7 +152,7 @@ export interface MentionKeywordResult {
   aiSearchVolume: number | null
   snippet: string | null
   allSources: Array<{ domain: string; url: string; title: string | null }>
-  queries: string[]
+  queries: Array<{ question: string; volume: number | null }>
 }
 
 export function parseMentionSearch(
@@ -187,8 +195,8 @@ export function parseMentionSearch(
             })
             if (!fallback) continue
             const existing2 = map.get(fallback.toLowerCase())!
-            if (item.question && !existing2.queries.includes(item.question)) {
-              existing2.queries.push(item.question)
+            if (item.question && !existing2.queries.some((q) => q.question === item.question)) {
+              existing2.queries.push({ question: item.question, volume: item.ai_search_volume || null })
             }
             if (item.ai_search_volume && (!existing2.aiSearchVolume || item.ai_search_volume > existing2.aiSearchVolume)) {
               existing2.aiSearchVolume = item.ai_search_volume
@@ -206,8 +214,8 @@ export function parseMentionSearch(
           }
 
           const existing = map.get(matchedKw.toLowerCase())!
-          if (item.question && !existing.queries.includes(item.question)) {
-            existing.queries.push(item.question)
+          if (item.question && !existing.queries.some((q) => q.question === item.question)) {
+            existing.queries.push({ question: item.question, volume: item.ai_search_volume || null })
           }
           const sources: Array<{ domain: string; url: string; title: string | null }> = (item.sources || []).map((s: any) => ({
             domain: (s.domain || '').toLowerCase().replace(/^www\./, ''),
