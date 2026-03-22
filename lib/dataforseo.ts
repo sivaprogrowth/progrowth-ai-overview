@@ -165,6 +165,27 @@ export function filterDiscoveredKeywords(
     .map((k) => k.keyword)
 }
 
+// Extract broader 2-word core phrases from long-tail keywords for richer query discovery
+export function extractCorePhrases(keywords: string[]): string[] {
+  const stopWords = new Set(['for', 'the', 'a', 'an', 'to', 'in', 'of', 'and', 'or', 'how', 'what', 'is', 'are', 'with', 'on', 'by', 'my', 'your', 'do', 'does'])
+  const cores = new Set<string>()
+
+  for (const kw of keywords) {
+    const words = kw.toLowerCase().split(/\s+/).filter((w) => !stopWords.has(w) && w.length > 2)
+    // Extract meaningful 2-word pairs
+    if (words.length >= 3) {
+      // Take first 2 content words as core phrase
+      cores.add(words.slice(0, 2).join(' '))
+      // Also try last 2 content words
+      cores.add(words.slice(-2).join(' '))
+    }
+  }
+
+  // Remove cores that are already in the original keywords
+  const kwSet = new Set(keywords.map((k) => k.toLowerCase()))
+  return Array.from(cores).filter((c) => !kwSet.has(c))
+}
+
 export const LLM_MODELS = {
   perplexity: 'sonar',
   claude: 'claude-haiku-4-5',

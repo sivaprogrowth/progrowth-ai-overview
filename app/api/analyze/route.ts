@@ -4,6 +4,7 @@ import {
   fetchLlmResponse,
   fetchRankedKeywords,
   filterDiscoveredKeywords,
+  extractCorePhrases,
   LLM_MODELS,
 } from '@/lib/dataforseo'
 import {
@@ -100,22 +101,26 @@ export async function GET(req: NextRequest) {
         }
 
         // ── Step 2 (or 1): LLM Mentions — Google AI Overviews + ChatGPT (per keyword) ──
+        // Also search for broader core phrases to discover more queries
+        const corePhrases = extractCorePhrases(keywords)
+        const mentionKeywords = [...keywords, ...corePhrases]
+
         send('progress', {
           step: 1 + stepOffset,
           total: totalSteps,
-          message: `Scanning Google AI Overviews & ChatGPT for ${keywords.length} keywords...`,
+          message: `Scanning Google AI Overviews & ChatGPT for ${mentionKeywords.length} terms (${keywords.length} keywords + ${corePhrases.length} core phrases)...`,
         })
 
         // Call per keyword to avoid AND-logic issue with multi-target requests
         const googleResults: any[] = []
         const chatgptResults: any[] = []
         const mentionBatchSize = 5
-        for (let i = 0; i < keywords.length; i += mentionBatchSize) {
-          const batch = keywords.slice(i, i + mentionBatchSize)
+        for (let i = 0; i < mentionKeywords.length; i += mentionBatchSize) {
+          const batch = mentionKeywords.slice(i, i + mentionBatchSize)
           send('progress', {
             step: 1 + stepOffset,
             total: totalSteps,
-            message: `Google + ChatGPT (${Math.min(i + mentionBatchSize, keywords.length)}/${keywords.length})...`,
+            message: `Google + ChatGPT (${Math.min(i + mentionBatchSize, mentionKeywords.length)}/${mentionKeywords.length})...`,
           })
 
           const calls = batch.flatMap((kw) => {
@@ -151,8 +156,45 @@ export async function GET(req: NextRequest) {
 
         const googleMerged = mergeResponses(googleResults)
         const chatgptMerged = mergeResponses(chatgptResults)
-        const googleMap = parseMentionSearch(googleMerged, domain, keywords)
-        const chatgptMap = parseMentionSearch(chatgptMerged, domain, keywords)
+        // Parse with all mentionKeywords so core phrase queries get assigned to closest original keyword
+        const googleMap = parseMentionSearch(googleMerged, domain, mentionKeywords)
+        const chatgptMap = parseMentionSearch(chatgptMerged, domain, mentionKeywords)
+        // Merge core phrase results into their parent keywords
+        for (const core of corePhrases) {
+          const coreLower = core.toLowerCase()
+          const gCore = googleMap.get(coreLower)
+          const cCore = chatgptMap.get(coreLower)
+          // Find the original keyword this core came from
+          const parent = keywords.find((kw) => {
+            const kwWords = kw.toLowerCase().split(/\s+/)
+            return core.toLowerCase().split(/\s+/).every((w) => kwWords.includes(w))
+          })
+          if (parent) {
+            const parentLower = parent.toLowerCase()
+            const gParent = googleMap.get(parentLower)
+            const cParent = chatgptMap.get(parentLower)
+            if (gCore && gParent) {
+              for (const q of gCore.queries) {
+                if (!gParent.queries.includes(q)) gParent.queries.push(q)
+              }
+              if (!gParent.aiSearchVolume && gCore.aiSearchVolume) gParent.aiSearchVolume = gCore.aiSearchVolume
+              for (const s of gCore.allSources) {
+                if (!gParent.allSources.find((es) => es.domain === s.domain)) gParent.allSources.push(s)
+              }
+            }
+            if (cCore && cParent) {
+              for (const q of cCore.queries) {
+                if (!cParent.queries.includes(q)) cParent.queries.push(q)
+              }
+              for (const s of cCore.allSources) {
+                if (!cParent.allSources.find((es) => es.domain === s.domain)) cParent.allSources.push(s)
+              }
+            }
+          }
+          // Remove core phrase keys from maps (only keep original keywords)
+          googleMap.delete(coreLower)
+          chatgptMap.delete(coreLower)
+        }
 
         const googleCount = Array.from(googleMap.values()).filter((m) => m.domainFound).length
         const chatgptCount = Array.from(chatgptMap.values()).filter((m) => m.domainFound).length
