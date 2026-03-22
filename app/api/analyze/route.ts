@@ -72,8 +72,8 @@ export async function GET(req: NextRequest) {
             message: `Discovering top keywords for ${domain}...`,
           })
 
-          const rawKeywords = await fetchRankedKeywords(domain, 30)
-          keywords = filterDiscoveredKeywords(rawKeywords, domain).slice(0, 20)
+          const rawKeywords = await fetchRankedKeywords(domain, 20)
+          keywords = filterDiscoveredKeywords(rawKeywords, domain).slice(0, 8)
 
           if (keywords.length === 0) {
             send('error', { message: `No rankable keywords found for ${domain}. Try entering keywords manually.` })
@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
         // Call per keyword to avoid AND-logic issue with multi-target requests
         const googleResults: any[] = []
         const chatgptResults: any[] = []
-        const mentionBatchSize = 3
+        const mentionBatchSize = 5
         for (let i = 0; i < keywords.length; i += mentionBatchSize) {
           const batch = keywords.slice(i, i + mentionBatchSize)
           send('progress', {
@@ -162,7 +162,7 @@ export async function GET(req: NextRequest) {
         })
 
         const perplexityMap = new Map<string, PlatformResult>()
-        const batchSize = 3
+        const batchSize = 4
         for (let i = 0; i < keywords.length; i += batchSize) {
           const batch = keywords.slice(i, i + batchSize)
           send('progress', {
