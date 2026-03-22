@@ -133,17 +133,26 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // Merge all per-keyword results into combined maps
-        const googleMap = parseMentionSearch(null, domain, keywords)
-        const chatgptMap = parseMentionSearch(null, domain, keywords)
-        for (let i = 0; i < keywords.length; i++) {
-          const gMap = parseMentionSearch(googleResults[i], domain, [keywords[i]])
-          const cMap = parseMentionSearch(chatgptResults[i], domain, [keywords[i]])
-          const gResult = gMap.get(keywords[i].toLowerCase())
-          const cResult = cMap.get(keywords[i].toLowerCase())
-          if (gResult) googleMap.set(keywords[i].toLowerCase(), gResult)
-          if (cResult) chatgptMap.set(keywords[i].toLowerCase(), cResult)
+        // Merge per-keyword results: combine all responses into one fake bulk response per platform
+        function mergeResponses(responses: any[]): any {
+          const allItems: any[] = []
+          for (const res of responses) {
+            const tasks = res?.tasks || []
+            for (const task of tasks) {
+              const results = task?.result || []
+              for (const result of results) {
+                allItems.push(...(result?.items || []))
+              }
+            }
+          }
+          if (allItems.length === 0) return null
+          return { tasks: [{ result: [{ items: allItems }] }] }
         }
+
+        const googleMerged = mergeResponses(googleResults)
+        const chatgptMerged = mergeResponses(chatgptResults)
+        const googleMap = parseMentionSearch(googleMerged, domain, keywords)
+        const chatgptMap = parseMentionSearch(chatgptMerged, domain, keywords)
 
         const googleCount = Array.from(googleMap.values()).filter((m) => m.domainFound).length
         const chatgptCount = Array.from(chatgptMap.values()).filter((m) => m.domainFound).length
