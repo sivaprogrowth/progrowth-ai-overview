@@ -28,6 +28,7 @@ export function generateCSV(rows: MentionRow[]): string {
     'Competitor 3 Page URL',
     'Content Gap',
     'Context Snippet',
+    'Queries (People Are Asking)',
   ]
 
   const lines = [headers.map(escapeCSV).join(',')]
@@ -52,6 +53,7 @@ export function generateCSV(rows: MentionRow[]): string {
         row.competitor_3_page_url,
         row.content_gap ? 'YES' : 'NO',
         row.context_snippet,
+        row.queries.join(' | '),
       ]
         .map(escapeCSV)
         .join(',')

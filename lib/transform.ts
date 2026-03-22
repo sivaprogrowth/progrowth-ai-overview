@@ -16,6 +16,7 @@ export interface MentionRow {
   competitor_3_page_url: string | null
   content_gap: boolean
   context_snippet: string | null
+  queries: string[]
 }
 
 export interface PlatformResult {
@@ -105,6 +106,12 @@ export function transformToRows(
     const top3 = Array.from(allCompetitors.values()).slice(0, 3)
     const contentGap = platforms === 0 && top3.length > 0
 
+    // Collect unique queries from Google and ChatGPT mentions
+    const queries: string[] = []
+    for (const q of [...(google?.queries || []), ...(chatgpt?.queries || [])]) {
+      if (!queries.includes(q)) queries.push(q)
+    }
+
     return {
       keyword: kw,
       ai_search_volume: aiVolume,
@@ -123,6 +130,7 @@ export function transformToRows(
       competitor_3_page_url: top3[2]?.url ?? null,
       content_gap: contentGap,
       context_snippet: snippet ? snippet.slice(0, 200) : null,
+      queries,
     }
   })
 }
@@ -136,6 +144,7 @@ export interface MentionKeywordResult {
   aiSearchVolume: number | null
   snippet: string | null
   allSources: Array<{ domain: string; url: string; title: string | null }>
+  queries: string[]
 }
 
 export function parseMentionSearch(
@@ -155,6 +164,7 @@ export function parseMentionSearch(
       aiSearchVolume: null,
       snippet: null,
       allSources: [],
+      queries: [],
     })
   }
 
@@ -177,6 +187,9 @@ export function parseMentionSearch(
             })
             if (!fallback) continue
             const existing2 = map.get(fallback.toLowerCase())!
+            if (item.question && !existing2.queries.includes(item.question)) {
+              existing2.queries.push(item.question)
+            }
             if (item.ai_search_volume && (!existing2.aiSearchVolume || item.ai_search_volume > existing2.aiSearchVolume)) {
               existing2.aiSearchVolume = item.ai_search_volume
             }
@@ -193,6 +206,9 @@ export function parseMentionSearch(
           }
 
           const existing = map.get(matchedKw.toLowerCase())!
+          if (item.question && !existing.queries.includes(item.question)) {
+            existing.queries.push(item.question)
+          }
           const sources: Array<{ domain: string; url: string; title: string | null }> = (item.sources || []).map((s: any) => ({
             domain: (s.domain || '').toLowerCase().replace(/^www\./, ''),
             url: s.url || '',
