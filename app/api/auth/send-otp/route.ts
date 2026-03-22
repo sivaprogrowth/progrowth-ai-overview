@@ -44,7 +44,15 @@ export async function POST(req: NextRequest) {
       `,
     })
 
-    return NextResponse.json({ success: true, otpToken })
+    const response = NextResponse.json({ success: true })
+    response.cookies.set('otp_token', otpToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 5 * 60, // 5 minutes
+      path: '/api/auth/',
+    })
+    return response
   } catch (error: any) {
     console.error('Send OTP error:', error)
     return NextResponse.json({ error: 'Failed to send code', detail: error?.message || String(error) }, { status: 500 })

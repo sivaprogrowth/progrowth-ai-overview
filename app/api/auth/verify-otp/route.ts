@@ -3,10 +3,11 @@ import { verifyOTPToken, createSessionToken } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, code, otpToken } = await req.json()
+    const { email, code } = await req.json()
+    const otpToken = req.cookies.get('otp_token')?.value
 
     if (!email || !code || !otpToken) {
-      return NextResponse.json({ error: 'Email, code, and otpToken are required' }, { status: 400 })
+      return NextResponse.json({ error: 'Email and code are required' }, { status: 400 })
     }
 
     const emailLower = email.toLowerCase().trim()
@@ -25,6 +26,7 @@ export async function POST(req: NextRequest) {
       maxAge: 24 * 60 * 60, // 24 hours
       path: '/',
     })
+    response.cookies.delete('otp_token')
 
     return response
   } catch (error: any) {
