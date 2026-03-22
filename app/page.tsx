@@ -9,7 +9,7 @@ import ResultsTable from '@/components/ResultsTable'
 import DownloadButton from '@/components/DownloadButton'
 import DeepDiveView from '@/components/DeepDiveView'
 import { MentionRow, DeepDiveResult } from '@/lib/transform'
-import { generateCSV } from '@/lib/csv'
+import { generateCSV, generateBulkCsv } from '@/lib/csv'
 
 interface Summary {
   domain: string
@@ -19,6 +19,47 @@ interface Summary {
   perplexityPresent: number
   claudePresent: number
   contentGaps: number
+}
+
+function processChunkViaSSE(
+  domain: string,
+  keywords: string[],
+  onProgress: (event: ProgressEvent) => void
+): Promise<MentionRow[]> {
+  return new Promise((resolve, reject) => {
+    const params = new URLSearchParams({
+      domain,
+      keywords: keywords.join('\n'),
+      mode: 'bulkcsv',
+    })
+    const es = new EventSource(`/api/analyze?${params}`)
+
+    es.addEventListener('progress', (e) => {
+      const data = JSON.parse(e.data)
+      onProgress({ ...data, timestamp: new Date().toLocaleTimeString() })
+    })
+
+    es.addEventListener('complete', (e) => {
+      const data = JSON.parse(e.data)
+      es.close()
+      resolve(data.rows)
+    })
+
+    es.addEventListener('error', (e) => {
+      es.close()
+      if (e instanceof MessageEvent) {
+        reject(new Error(JSON.parse(e.data).message))
+      } else {
+        reject(new Error('Connection lost'))
+      }
+    })
+
+    es.onerror = () => {
+      if (es.readyState === EventSource.CLOSED) return
+      es.close()
+      reject(new Error('Connection lost'))
+    }
+  })
 }
 
 export default function Home() {
@@ -33,6 +74,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'all' | 'gaps'>('all')
   const [deepDiveResult, setDeepDiveResult] = useState<DeepDiveResult | null>(null)
+  const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
@@ -53,6 +95,7 @@ export default function Home() {
     setDomain(dom)
     setActiveTab('all')
     setDeepDiveResult(null)
+    setBulkProgress(null)
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -100,6 +143,75 @@ export default function Home() {
     }
   }, [])
 
+  const handleBulkCsvSubmit = useCallback(async (
+    dom: string,
+    keywords: string[],
+    originalRows: string[][],
+    originalHeaders: string[]
+  ) => {
+    setIsRunning(true)
+    setEvents([])
+    setRows([])
+    setSummary(null)
+    setCsvData(null)
+    setError(null)
+    setDomain(dom)
+    setActiveTab('all')
+    setDeepDiveResult(null)
+    setBulkProgress({ completed: 0, total: keywords.length })
+
+    const CHUNK_SIZE = 15
+    const allRows: MentionRow[] = []
+
+    for (let i = 0; i < keywords.length; i += CHUNK_SIZE) {
+      const chunk = keywords.slice(i, i + CHUNK_SIZE)
+      const chunkNum = Math.floor(i / CHUNK_SIZE) + 1
+      const totalChunks = Math.ceil(keywords.length / CHUNK_SIZE)
+
+      setEvents((prev) => [
+        ...prev,
+        {
+          step: chunkNum,
+          total: totalChunks,
+          message: `Processing batch ${chunkNum}/${totalChunks} (keywords ${i + 1}-${Math.min(i + CHUNK_SIZE, keywords.length)} of ${keywords.length})...`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ])
+
+      try {
+        const chunkRows = await processChunkViaSSE(dom, chunk, (event) => {
+          setEvents((prev) => [...prev, event])
+        })
+        allRows.push(...chunkRows)
+        setBulkProgress({ completed: Math.min(i + CHUNK_SIZE, keywords.length), total: keywords.length })
+      } catch (err: any) {
+        setError(`Failed on batch ${chunkNum}: ${err.message}`)
+        break
+      }
+    }
+
+    if (allRows.length > 0) {
+      setRows(allRows)
+      const enrichedCsv = generateBulkCsv(originalHeaders, originalRows, keywords, allRows)
+      setCsvData(enrichedCsv)
+
+      const googleCount = allRows.filter((r) => r.google_ai_overview).length
+      const chatgptCount = allRows.filter((r) => r.chatgpt_mentioned).length
+      setSummary({
+        domain: dom,
+        totalKeywords: allRows.length,
+        googlePresent: googleCount,
+        chatgptPresent: chatgptCount,
+        perplexityPresent: 0,
+        claudePresent: 0,
+        contentGaps: allRows.filter((r) => r.content_gap).length,
+      })
+    }
+
+    setBulkProgress(null)
+    setIsRunning(false)
+  }, [])
+
   if (checkingAuth) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -126,7 +238,27 @@ export default function Home() {
 
         <div className="grid grid-cols-1 lg:grid-cols-[350px_1fr] gap-8">
           <div className="space-y-6">
-            <AnalysisForm onSubmit={handleSubmit} isRunning={isRunning} />
+            <AnalysisForm
+              onSubmit={handleSubmit}
+              onBulkCsvSubmit={handleBulkCsvSubmit}
+              isRunning={isRunning}
+            />
+
+            {bulkProgress && (
+              <div className="bg-gray-900 border border-gray-700 rounded-lg p-4">
+                <div className="flex justify-between text-sm text-gray-300 mb-2">
+                  <span>Processing keywords...</span>
+                  <span>{bulkProgress.completed}/{bulkProgress.total}</span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div
+                    className="bg-lime-500 h-2 rounded-full transition-all"
+                    style={{ width: `${(bulkProgress.completed / bulkProgress.total) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             <ProgressLog events={events} />
             {error && (
               <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 text-red-300 text-sm">

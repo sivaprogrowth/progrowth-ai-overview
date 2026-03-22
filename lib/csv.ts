@@ -62,3 +62,51 @@ export function generateCSV(rows: MentionRow[]): string {
 
   return lines.join('\n')
 }
+
+export function generateBulkCsv(
+  originalHeaders: string[],
+  originalRows: string[][],
+  keywords: string[],
+  enrichedRows: MentionRow[]
+): string {
+  const enrichmentHeaders = [
+    'AI_Source_1_Domain',
+    'AI_Source_1_URL',
+    'AI_Source_2_Domain',
+    'AI_Source_2_URL',
+    'AI_Source_3_Domain',
+    'AI_Source_3_URL',
+    'Google_AI_Mentioned',
+    'ChatGPT_Mentioned',
+    'AI_Search_Volume',
+  ]
+
+  const headers = [...originalHeaders, ...enrichmentHeaders]
+  const lines = [headers.map(escapeCSV).join(',')]
+
+  const lookup = new Map<string, MentionRow>()
+  for (const row of enrichedRows) {
+    lookup.set(row.keyword.toLowerCase(), row)
+  }
+
+  for (let i = 0; i < originalRows.length; i++) {
+    const keyword = keywords[i]?.toLowerCase() || ''
+    const enriched = lookup.get(keyword)
+
+    const enrichmentCells = [
+      enriched?.competitor_1_domain,
+      enriched?.competitor_1_page_url,
+      enriched?.competitor_2_domain,
+      enriched?.competitor_2_page_url,
+      enriched?.competitor_3_domain,
+      enriched?.competitor_3_page_url,
+      enriched?.google_ai_overview ? 'YES' : 'NO',
+      enriched?.chatgpt_mentioned ? 'YES' : 'NO',
+      enriched?.ai_search_volume,
+    ]
+
+    lines.push([...originalRows[i], ...enrichmentCells].map(escapeCSV).join(','))
+  }
+
+  return lines.join('\n')
+}

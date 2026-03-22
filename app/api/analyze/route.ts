@@ -121,7 +121,8 @@ export async function GET(req: NextRequest) {
         }
 
         const isDiscovery = mode === 'discovery'
-        const totalSteps = isDiscovery ? 5 : 4
+        const isBulk = mode === 'bulkcsv'
+        const totalSteps = isDiscovery ? 5 : isBulk ? 2 : 4
         const stepOffset = isDiscovery ? 1 : 0
         let keywords: string[]
 
@@ -265,82 +266,88 @@ export async function GET(req: NextRequest) {
           message: `Google AI Overviews: ${googleCount}/${keywords.length} | ChatGPT: ${chatgptCount}/${keywords.length}`,
         })
 
-        // ── Step 3 (or 2): Perplexity (live queries) ──
-        send('progress', {
-          step: 2 + stepOffset,
-          total: totalSteps,
-          message: `Querying Perplexity for ${keywords.length} keywords...`,
-        })
-
         const perplexityMap = new Map<string, PlatformResult>()
-        const batchSize = 4
-        for (let i = 0; i < keywords.length; i += batchSize) {
-          const batch = keywords.slice(i, i + batchSize)
+        const claudeMap = new Map<string, PlatformResult>()
+        let perplexityCount = 0
+        let claudeCount = 0
+
+        if (!isBulk) {
+          // ── Step 3 (or 2): Perplexity (live queries) ──
           send('progress', {
             step: 2 + stepOffset,
             total: totalSteps,
-            message: `Perplexity (${Math.min(i + batchSize, keywords.length)}/${keywords.length})...`,
+            message: `Querying Perplexity for ${keywords.length} keywords...`,
           })
 
-          await Promise.all(
-            batch.map((kw) =>
-              fetchLlmResponse(kw, 'perplexity', LLM_MODELS.perplexity)
-                .then((res) => {
-                  perplexityMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain!))
-                })
-                .catch(() => {
-                  perplexityMap.set(kw.toLowerCase(), { found: false, position: null, snippet: null, citedUrls: [] })
-                })
+          const batchSize = 4
+          for (let i = 0; i < keywords.length; i += batchSize) {
+            const batch = keywords.slice(i, i + batchSize)
+            send('progress', {
+              step: 2 + stepOffset,
+              total: totalSteps,
+              message: `Perplexity (${Math.min(i + batchSize, keywords.length)}/${keywords.length})...`,
+            })
+
+            await Promise.all(
+              batch.map((kw) =>
+                fetchLlmResponse(kw, 'perplexity', LLM_MODELS.perplexity)
+                  .then((res) => {
+                    perplexityMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain!))
+                  })
+                  .catch(() => {
+                    perplexityMap.set(kw.toLowerCase(), { found: false, position: null, snippet: null, citedUrls: [] })
+                  })
+              )
             )
-          )
-        }
+          }
 
-        const perplexityCount = Array.from(perplexityMap.values()).filter((m) => m.found).length
-        send('progress', {
-          step: 2 + stepOffset,
-          total: totalSteps,
-          message: `Perplexity: ${perplexityCount}/${keywords.length}`,
-        })
+          perplexityCount = Array.from(perplexityMap.values()).filter((m) => m.found).length
+          send('progress', {
+            step: 2 + stepOffset,
+            total: totalSteps,
+            message: `Perplexity: ${perplexityCount}/${keywords.length}`,
+          })
 
-        // ── Step 4 (or 3): Claude (live queries) ──
-        send('progress', {
-          step: 3 + stepOffset,
-          total: totalSteps,
-          message: `Querying Claude for ${keywords.length} keywords...`,
-        })
-
-        const claudeMap = new Map<string, PlatformResult>()
-        for (let i = 0; i < keywords.length; i += batchSize) {
-          const batch = keywords.slice(i, i + batchSize)
+          // ── Step 4 (or 3): Claude (live queries) ──
           send('progress', {
             step: 3 + stepOffset,
             total: totalSteps,
-            message: `Claude (${Math.min(i + batchSize, keywords.length)}/${keywords.length})...`,
+            message: `Querying Claude for ${keywords.length} keywords...`,
           })
 
-          await Promise.all(
-            batch.map((kw) =>
-              fetchLlmResponse(kw, 'claude', LLM_MODELS.claude)
-                .then((res) => {
-                  claudeMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain!))
-                })
-                .catch(() => {
-                  claudeMap.set(kw.toLowerCase(), { found: false, position: null, snippet: null, citedUrls: [] })
-                })
+          for (let i = 0; i < keywords.length; i += batchSize) {
+            const batch = keywords.slice(i, i + batchSize)
+            send('progress', {
+              step: 3 + stepOffset,
+              total: totalSteps,
+              message: `Claude (${Math.min(i + batchSize, keywords.length)}/${keywords.length})...`,
+            })
+
+            await Promise.all(
+              batch.map((kw) =>
+                fetchLlmResponse(kw, 'claude', LLM_MODELS.claude)
+                  .then((res) => {
+                    claudeMap.set(kw.toLowerCase(), parseLlmResponseResult(res, domain!))
+                  })
+                  .catch(() => {
+                    claudeMap.set(kw.toLowerCase(), { found: false, position: null, snippet: null, citedUrls: [] })
+                  })
+              )
             )
-          )
+          }
+
+          claudeCount = Array.from(claudeMap.values()).filter((m) => m.found).length
+          send('progress', {
+            step: 3 + stepOffset,
+            total: totalSteps,
+            message: `Claude: ${claudeCount}/${keywords.length}`,
+          })
         }
 
-        const claudeCount = Array.from(claudeMap.values()).filter((m) => m.found).length
+        // ── Compile results ──
+        const compileStep = isBulk ? 2 : 4 + stepOffset
         send('progress', {
-          step: 3 + stepOffset,
-          total: totalSteps,
-          message: `Claude: ${claudeCount}/${keywords.length}`,
-        })
-
-        // ── Step 5 (or 4): Compile results ──
-        send('progress', {
-          step: 4 + stepOffset,
+          step: compileStep,
           total: totalSteps,
           message: 'Compiling results...',
         })

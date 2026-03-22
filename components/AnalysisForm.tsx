@@ -1,14 +1,45 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import Papa from 'papaparse'
 
 interface Props {
   onSubmit: (domain: string, keywords: string[], mode: 'keywords' | 'discovery' | 'deepdive') => void
+  onBulkCsvSubmit: (domain: string, keywords: string[], originalRows: string[][], originalHeaders: string[]) => void
   isRunning: boolean
 }
 
-export default function AnalysisForm({ onSubmit, isRunning }: Props) {
-  const [mode, setMode] = useState<'keywords' | 'discovery' | 'deepdive'>('keywords')
+export default function AnalysisForm({ onSubmit, onBulkCsvSubmit, isRunning }: Props) {
+  const [mode, setMode] = useState<'keywords' | 'discovery' | 'deepdive' | 'bulkcsv'>('keywords')
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([])
+  const [csvRows, setCsvRows] = useState<string[][]>([])
+  const [selectedColumn, setSelectedColumn] = useState<string>('')
+  const [csvFileName, setCsvFileName] = useState<string>('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvFileName(file.name)
+
+    Papa.parse(file, {
+      complete: (result) => {
+        const data = result.data as string[][]
+        if (data.length < 2) return
+
+        const headers = data[0]
+        const rows = data.slice(1).filter((r) => r.some((cell) => cell?.trim()))
+        setCsvHeaders(headers)
+        setCsvRows(rows)
+
+        // Auto-select keyword column
+        const autoMatch = headers.find((h) =>
+          /keyword|query|search.?term|topic/i.test(h)
+        )
+        setSelectedColumn(autoMatch || headers[0])
+      },
+    })
+  }
 
   return (
     <form
@@ -17,7 +48,17 @@ export default function AnalysisForm({ onSubmit, isRunning }: Props) {
         const form = e.target as HTMLFormElement
         const domain = (form.elements.namedItem('domain') as HTMLInputElement)?.value?.trim() || ''
 
-        if (mode === 'deepdive') {
+        if (mode === 'bulkcsv') {
+          if (!domain || !selectedColumn || csvRows.length === 0) return
+          const colIdx = csvHeaders.indexOf(selectedColumn)
+          const keywords = csvRows.map((r) => r[colIdx]?.trim()).filter(Boolean)
+          if (keywords.length === 0) return
+          if (keywords.length > 200) {
+            alert('Maximum 200 keywords allowed. Please reduce your CSV.')
+            return
+          }
+          onBulkCsvSubmit(domain, keywords, csvRows, csvHeaders)
+        } else if (mode === 'deepdive') {
           const query = (form.elements.namedItem('query') as HTMLInputElement).value.trim()
           if (query) onSubmit(domain, [query], 'deepdive')
         } else if (mode === 'discovery') {
@@ -40,6 +81,7 @@ export default function AnalysisForm({ onSubmit, isRunning }: Props) {
           { key: 'keywords' as const, label: 'Keywords' },
           { key: 'discovery' as const, label: 'Discovery' },
           { key: 'deepdive' as const, label: 'Deep Dive' },
+          { key: 'bulkcsv' as const, label: 'Bulk CSV' },
         ]).map((m) => (
           <button
             key={m.key}
@@ -121,6 +163,57 @@ export default function AnalysisForm({ onSubmit, isRunning }: Props) {
         </div>
       )}
 
+      {mode === 'bulkcsv' && (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Upload CSV
+            </label>
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full px-3 py-4 bg-gray-800 border border-dashed border-gray-600 rounded-lg text-center cursor-pointer hover:border-lime-500 transition-colors"
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              {csvFileName ? (
+                <div>
+                  <div className="text-white text-sm">{csvFileName}</div>
+                  <div className="text-gray-500 text-xs mt-1">{csvRows.length} rows detected</div>
+                </div>
+              ) : (
+                <div className="text-gray-500 text-sm">Click to select a CSV file</div>
+              )}
+            </div>
+          </div>
+
+          {csvHeaders.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">
+                Keyword Column
+              </label>
+              <select
+                value={selectedColumn}
+                onChange={(e) => setSelectedColumn(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-lime-500 focus:border-transparent"
+              >
+                {csvHeaders.map((h) => (
+                  <option key={h} value={h}>{h}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <p className="text-xs text-gray-500">
+            Upload a CSV with keywords. The tool will find the top 3 AI-cited sources for each keyword (Google AI Overviews + ChatGPT) and add them as new columns. Max 200 keywords.
+          </p>
+        </>
+      )}
+
       {mode === 'discovery' && (
         <p className="text-xs text-gray-500">
           Auto-discovers top keywords your domain ranks for in Google, then checks AI visibility across all 4 platforms.
@@ -129,7 +222,7 @@ export default function AnalysisForm({ onSubmit, isRunning }: Props) {
 
       <button
         type="submit"
-        disabled={isRunning}
+        disabled={isRunning || (mode === 'bulkcsv' && csvRows.length === 0)}
         className="w-full py-3 px-4 bg-lime-500 hover:bg-lime-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-black font-semibold rounded-lg transition-colors"
       >
         {isRunning
@@ -138,6 +231,8 @@ export default function AnalysisForm({ onSubmit, isRunning }: Props) {
           ? 'Discover & Analyze'
           : mode === 'deepdive'
           ? 'Deep Dive'
+          : mode === 'bulkcsv'
+          ? 'Enrich & Download'
           : 'Run Analysis'}
       </button>
     </form>
