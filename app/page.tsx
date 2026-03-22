@@ -34,14 +34,11 @@ export default function Home() {
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
-    // Check if session cookie is valid by hitting a protected route
-    fetch('/api/analyze?domain=_ping&keywords=_ping')
-      .then((res) => {
-        setLoggedIn(res.ok || (res.status !== 401 && res.status !== 403))
-      })
-      .catch(() => {
-        setLoggedIn(false)
-      })
+    // Check if session cookie is valid via dedicated auth endpoint
+    fetch('/api/auth/check')
+      .then((res) => res.json())
+      .then((data) => setLoggedIn(data.authenticated === true))
+      .catch(() => setLoggedIn(false))
       .finally(() => setCheckingAuth(false))
   }, [])
 
