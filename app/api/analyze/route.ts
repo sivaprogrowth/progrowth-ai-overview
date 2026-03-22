@@ -12,7 +12,7 @@ import {
 } from '@/lib/transform'
 
 export const runtime = 'nodejs'
-export const maxDuration = 120
+export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
   const domain = req.nextUrl.searchParams.get('domain')?.trim()
