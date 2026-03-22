@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import nodemailer from 'nodemailer'
-import { generateOTP, createOTPToken } from '@/lib/auth'
+import { generateOTP } from '@/lib/auth'
+import { supabase } from '@/lib/supabase'
 
 const transporter = nodemailer.createTransport({
   host: 'smtp-relay.brevo.com',
@@ -26,7 +27,18 @@ export async function POST(req: NextRequest) {
     }
 
     const code = generateOTP()
-    const otpToken = createOTPToken(emailLower, code)
+
+    // Store OTP in Supabase
+    const { error: dbError } = await supabase.from('otp_codes').insert({
+      email: emailLower,
+      code,
+      expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    })
+
+    if (dbError) {
+      console.error('Supabase insert error:', dbError)
+      return NextResponse.json({ error: 'Failed to generate code' }, { status: 500 })
+    }
 
     await transporter.sendMail({
       from: '"ProGrowth AI Overview" <siva@progrowth.services>',
@@ -44,15 +56,7 @@ export async function POST(req: NextRequest) {
       `,
     })
 
-    const response = NextResponse.json({ success: true })
-    response.cookies.set('otp_token', otpToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 5 * 60, // 5 minutes
-      path: '/api/auth/',
-    })
-    return response
+    return NextResponse.json({ success: true })
   } catch (error: any) {
     console.error('Send OTP error:', error)
     return NextResponse.json({ error: 'Failed to send code', detail: error?.message || String(error) }, { status: 500 })

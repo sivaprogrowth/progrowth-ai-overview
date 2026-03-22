@@ -10,11 +10,25 @@ import {
   transformToRows,
   PlatformResult,
 } from '@/lib/transform'
+import { supabase } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
+function getEmailFromSession(req: NextRequest): string | null {
+  try {
+    const token = req.cookies.get('session')?.value
+    if (!token) return null
+    const [data] = token.split('.')
+    const payload = JSON.parse(Buffer.from(data, 'base64url').toString())
+    return payload.email || null
+  } catch {
+    return null
+  }
+}
+
 export async function GET(req: NextRequest) {
+  const email = getEmailFromSession(req)
   const domain = req.nextUrl.searchParams.get('domain')?.trim()
   const keywordsParam = req.nextUrl.searchParams.get('keywords')?.trim()
 
@@ -182,6 +196,22 @@ export async function GET(req: NextRequest) {
         }
 
         send('complete', { rows, summary })
+
+        // Fire-and-forget: store analysis in Supabase
+        if (email) {
+          supabase
+            .from('analyses')
+            .insert({
+              email,
+              domain,
+              keywords,
+              summary,
+              rows,
+            })
+            .then(({ error: insertErr }) => {
+              if (insertErr) console.error('Failed to store analysis:', insertErr)
+            })
+        }
       } catch (error: any) {
         send('error', { message: error.message || 'Analysis failed' })
       } finally {
