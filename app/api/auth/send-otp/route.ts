@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Resend } from 'resend'
 import { isBusinessEmail, generateOTP, storeOTP } from '@/lib/auth'
-
-const resend = new Resend(process.env.RESEND_API_KEY)
 
 export async function POST(req: NextRequest) {
   try {
@@ -29,21 +26,35 @@ export async function POST(req: NextRequest) {
     const code = generateOTP()
     storeOTP(emailLower, code)
 
-    await resend.emails.send({
-      from: 'ProGrowth AI Overview <noreply@progrowth.services>',
-      to: emailLower,
-      subject: `Your login code: ${code}`,
-      html: `
-        <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
-          <h2 style="color: #84cc16;">ProGrowth AI Overview</h2>
-          <p>Your one-time login code is:</p>
-          <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; padding: 20px; background: #f3f4f6; border-radius: 8px; text-align: center; margin: 20px 0;">
-            ${code}
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'content-type': 'application/json',
+        'api-key': process.env.BREVO_API_KEY || '',
+      },
+      body: JSON.stringify({
+        sender: { email: 'siva@progrowth.services', name: 'ProGrowth AI Overview' },
+        to: [{ email: emailLower }],
+        subject: `Your login code: ${code}`,
+        htmlContent: `
+          <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
+            <h2 style="color: #84cc16;">ProGrowth AI Overview</h2>
+            <p>Your one-time login code is:</p>
+            <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; padding: 20px; background: #f3f4f6; border-radius: 8px; text-align: center; margin: 20px 0;">
+              ${code}
+            </div>
+            <p style="color: #6b7280; font-size: 14px;">This code expires in 5 minutes.</p>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">This code expires in 5 minutes.</p>
-        </div>
-      `,
+        `,
+      }),
     })
+
+    if (!res.ok) {
+      const err = await res.text()
+      console.error('Brevo error:', err)
+      return NextResponse.json({ error: 'Failed to send code' }, { status: 500 })
+    }
 
     return NextResponse.json({ success: true })
   } catch (error: any) {
