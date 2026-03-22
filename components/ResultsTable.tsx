@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import { MentionRow } from '@/lib/transform'
 
 interface Props {
@@ -118,7 +118,7 @@ export default function ResultsTable({ rows, activeTab, onTabChange }: Props) {
           </thead>
           <tbody className="divide-y divide-gray-800">
             {sorted.map((row, i) => (
-              <>
+              <Fragment key={i}>
                 <tr
                   key={`row-${i}`}
                   className={`${
@@ -195,7 +195,7 @@ export default function ResultsTable({ rows, activeTab, onTabChange }: Props) {
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>
