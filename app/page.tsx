@@ -8,6 +8,7 @@ import SummaryDashboard from '@/components/SummaryDashboard'
 import ResultsTable from '@/components/ResultsTable'
 import DownloadButton from '@/components/DownloadButton'
 import DeepDiveView from '@/components/DeepDiveView'
+import AnalysisHistory from '@/components/AnalysisHistory'
 import { MentionRow, DeepDiveResult } from '@/lib/transform'
 import { generateCSV, generateBulkCsv } from '@/lib/csv'
 
@@ -143,6 +144,32 @@ export default function Home() {
     }
   }, [])
 
+  const loadPastAnalysis = useCallback(async (id: string) => {
+    setIsRunning(true)
+    setEvents([])
+    setRows([])
+    setSummary(null)
+    setCsvData(null)
+    setError(null)
+    setDeepDiveResult(null)
+    setBulkProgress(null)
+
+    try {
+      const res = await fetch(`/api/analyses/${id}`)
+      if (!res.ok) throw new Error('Failed to load analysis')
+      const data = await res.json()
+
+      setDomain(data.domain)
+      setRows(data.rows)
+      setSummary(data.summary)
+      setCsvData(generateCSV(data.rows))
+    } catch (err: any) {
+      setError(err.message || 'Failed to load past analysis')
+    } finally {
+      setIsRunning(false)
+    }
+  }, [])
+
   const handleBulkCsvSubmit = useCallback(async (
     dom: string,
     keywords: string[],
@@ -241,6 +268,11 @@ export default function Home() {
             <AnalysisForm
               onSubmit={handleSubmit}
               onBulkCsvSubmit={handleBulkCsvSubmit}
+              isRunning={isRunning}
+            />
+
+            <AnalysisHistory
+              onLoadAnalysis={loadPastAnalysis}
               isRunning={isRunning}
             />
 
