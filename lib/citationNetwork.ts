@@ -157,23 +157,30 @@ export interface CitationNetworkMatrix {
 
 /**
  * Run all engines against all prompts and aggregate into the matrix.
- * Batches by prompt (each batch fires 4 engines in parallel for that
- * prompt) to keep DataForSEO concurrency reasonable.
+ * Batches prompts 5-at-a-time (each firing 4 engine calls in parallel)
+ * so up to 20 concurrent DataForSEO calls per wave. With ~3s per call,
+ * 25 prompts complete in 5 batches × ~3s = ~15s — well under the 60s
+ * Vercel Hobby function timeout.
  */
 export async function computeCitationNetwork(
   prompts: CanonicalPrompt[] = CANONICAL_PROMPTS,
   engines: Engine[] = ALL_ENGINES
 ): Promise<CitationNetworkMatrix> {
   const perPrompt: PerPromptResult[] = []
+  const PROMPT_BATCH = 5
 
-  // Sequential by prompt, parallel by engine within each prompt — keeps
-  // concurrent API calls at most 4 at a time.
-  for (const prompt of prompts) {
-    const engineResults = await Promise.all(
-      engines.map(async (e) => [e, await fetchEngineCitations(e, prompt.text)] as const)
+  for (let i = 0; i < prompts.length; i += PROMPT_BATCH) {
+    const slice = prompts.slice(i, i + PROMPT_BATCH)
+    const batchResults = await Promise.all(
+      slice.map(async (prompt) => {
+        const engineResults = await Promise.all(
+          engines.map(async (e) => [e, await fetchEngineCitations(e, prompt.text)] as const)
+        )
+        const citations = Object.fromEntries(engineResults) as Record<Engine, string[]>
+        return { prompt, citations }
+      })
     )
-    const citations = Object.fromEntries(engineResults) as Record<Engine, string[]>
-    perPrompt.push({ prompt, citations })
+    perPrompt.push(...batchResults)
   }
 
   // Build per-cell counts: cluster → engine → Map<domain, hits>
