@@ -1,5 +1,5 @@
 /**
- * KPI 5 — GEO/SEO Gap computation.
+ * KPI 5 — GEO/SEO Gap computation (multi-tenant Phase 1).
  *
  * Per /Users/sivam1mac/ProGrowth_GEO_KPI_Scorecard.md, the formula is:
  *
@@ -7,18 +7,28 @@
  *     gap_query = (chatgpt_domains ∩ google_top10_domains) / chatgpt_domains
  *   Aggregate: mean across prompts.
  *
- * Higher gap = better overlap = traditional SEO investment is translating
- * to AI visibility. Lower gap = SEO and GEO are pulling from different
- * source pools — diagnoses where to invest next (Tasks 18 / 21 / 22).
+ * Higher overlap = better translation of SEO investment to AI visibility.
+ * Lower overlap = SEO and GEO pull from different source pools → diagnoses
+ * where to invest next (Tasks 18 / 21 / 22).
  *
- * Cost: each query costs ~$0.10 (DataForSEO SERP organic) + ~$0.10 (LLM
- * mentions) = ~$0.20 per query. The 5-query probe set runs at ~$1.00 per
- * full measurement. NOT invoked on dashboard page load — only via the
- * /api/cron/geo-seo-gap endpoint, which the user triggers manually or
- * wires to a weekly cron (subtask 20.6).
+ * Multi-tenant: brand-citation checks consult the client's domain set, and
+ * the prompt set falls back to the client's `prompts`/`probe_queries` when
+ * present, otherwise the canonical ProGrowth default. The default 5-query
+ * `GEO_SEO_PROBE_QUERIES` remains exported for back-compat with the cron
+ * route's hand-rolled `?queries=` mode.
+ *
+ * Cost: each query ~$0.20 (DataForSEO SERP organic + chat_gpt llm_responses).
+ * Weekly probe set (5 queries): ~$1.00. Monthly canonical (25 queries):
+ * ~$10. NOT invoked on dashboard page load.
  */
 
-import { CANONICAL_PROMPTS, PROMPT_CLUSTERS, PROMPT_INDEX_BY_TEXT } from './prompts'
+import {
+  CANONICAL_PROMPTS,
+  buildPromptIndex,
+  getClustersForClient,
+  getPromptsForClient,
+} from './prompts'
+import { type Client, getBrandDomainSet } from './clients'
 
 // Note: we deliberately don't use lib/dataforseo's fetchMentionSearch here.
 // The llm_mentions/search endpoint requires a subscription tier that isn't
@@ -26,24 +36,12 @@ import { CANONICAL_PROMPTS, PROMPT_CLUSTERS, PROMPT_INDEX_BY_TEXT } from './prom
 // The chat_gpt/llm_responses endpoint works on the current plan and returns
 // the actual ChatGPT answer with citation annotations.
 
-/** Domains that count as ProGrowth for brand-citation checks. */
-const PROGROWTH_DOMAINS = new Set(['progrowth.services', 'www.progrowth.services'])
-
-function brandCitedByChatgpt(domains: string[]): boolean {
-  return domains.some((d) => PROGROWTH_DOMAINS.has(d.toLowerCase()))
-}
-
-function brandRankedByGoogle(domains: string[]): boolean {
-  return domains.some((d) => PROGROWTH_DOMAINS.has(d.toLowerCase()))
+function citedDomainsContainBrand(domains: string[], brandSet: Set<string>): boolean {
+  return domains.some((d) => brandSet.has(d.toLowerCase()))
 }
 
 export type RunMode = 'weekly' | 'monthly' | 'auto'
 
-/**
- * UTC check: is this the first Monday of the month? Used by the cron to
- * decide whether to run the cheap 5-prompt probe (every Monday) or the
- * full 25-prompt canonical set (first Monday only).
- */
 export function isFirstMondayOfMonth(date: Date = new Date()): boolean {
   return date.getUTCDay() === 1 && date.getUTCDate() <= 7
 }
@@ -53,17 +51,29 @@ export function resolveRunMode(mode: RunMode = 'auto'): 'weekly' | 'monthly' {
   return mode
 }
 
-export function getPromptsForMode(mode: 'weekly' | 'monthly'): string[] {
-  return mode === 'monthly'
-    ? CANONICAL_PROMPTS.map((p) => p.text)
-    : GEO_SEO_PROBE_QUERIES
+/**
+ * Resolve the prompt set for a given client + mode:
+ *   weekly  → client.probe_queries (else first 5 of canonical / client.prompts)
+ *   monthly → client.prompts (else CANONICAL_PROMPTS)
+ *
+ * Returned as plain strings so the rest of the pipeline can treat all
+ * sources uniformly.
+ */
+export function getPromptsForMode(mode: 'weekly' | 'monthly', client: Client): string[] {
+  if (mode === 'monthly') {
+    return getPromptsForClient(client).map((p) => p.text)
+  }
+  // weekly
+  if (client.probe_queries.length > 0) return client.probe_queries
+  // Fallback: first 5 of canonical / client prompts
+  return getPromptsForClient(client).slice(0, 5).map((p) => p.text)
 }
 
 /**
- * Seed prompt set for the gap measurement. Picked to span ProGrowth's
- * priority topics so the aggregate gap is representative of the brand's
- * AI-vs-SEO posture, not a single niche. Task 16 (prompt cluster
- * framework) eventually replaces this with the canonical 25-prompt set.
+ * Default seed for ProGrowth. Retained as an export because the cron route
+ * historically referenced it and several /tmp test scripts hardcode it. New
+ * code should prefer `getPromptsForMode('weekly', client)` so other clients
+ * get their own probe set.
  */
 export const GEO_SEO_PROBE_QUERIES = [
   'fractional CMO for B2B SaaS',
@@ -82,10 +92,6 @@ function getAuth(): string {
   return Buffer.from(`${login}:${password}`).toString('base64')
 }
 
-/**
- * Strip URLs down to registrable domains for set comparison.
- * "https://www.bankrate.com/cmo-trends/" → "bankrate.com"
- */
 export function extractDomain(input: string | undefined): string | null {
   if (!input) return null
   try {
@@ -96,7 +102,6 @@ export function extractDomain(input: string | undefined): string | null {
   }
 }
 
-/** Pure-math Jaccard overlap: |A ∩ B| / |A|. Returns 0..1. */
 export function chatgptToGoogleOverlap(chatgptDomains: string[], googleDomains: string[]): number {
   const aiSet = new Set(chatgptDomains.map((d) => d.toLowerCase()))
   if (aiSet.size === 0) return 0
@@ -108,12 +113,6 @@ export function chatgptToGoogleOverlap(chatgptDomains: string[], googleDomains: 
   return intersection / aiSet.size
 }
 
-/**
- * Top 10 Google organic domains for a single keyword.
- * Direct call to DataForSEO SERP API (not via the existing dfsPost helper
- * because the SERP organic endpoint has a different cost profile and we
- * want explicit control over the depth + location).
- */
 export async function fetchGoogleTop10Domains(keyword: string): Promise<string[]> {
   const res = await fetch(`${DATAFORSEO_BASE}/serp/google/organic/live/advanced`, {
     method: 'POST',
@@ -144,15 +143,6 @@ export async function fetchGoogleTop10Domains(keyword: string): Promise<string[]
   return Array.from(domains)
 }
 
-/**
- * Domains that ChatGPT cites when answering a question about `keyword`.
- * Uses DataForSEO's chat_gpt/llm_responses/live endpoint which returns
- * the actual ChatGPT answer with a citations annotations array.
- *
- * Phrases the keyword as a recommendation-seeking question to maximize
- * the chance ChatGPT cites multiple sources rather than answering from
- * pretrained knowledge alone.
- */
 export async function fetchChatgptCitedDomains(keyword: string): Promise<string[]> {
   const prompt = `What are the best services for "${keyword}"? List the top 5 companies with their websites and a brief reason for each.`
   const res = await fetch(`${DATAFORSEO_BASE}/ai_optimization/chat_gpt/llm_responses/live`, {
@@ -175,8 +165,6 @@ export async function fetchChatgptCitedDomains(keyword: string): Promise<string[
   const items = data?.tasks?.[0]?.result?.[0]?.items ?? []
   const domains = new Set<string>()
   for (const item of items) {
-    // Citations live in item.sections[*].annotations[*].url for type=message
-    // (and rarely at item.annotations directly for simpler responses).
     const sections = item?.sections ?? []
     for (const section of sections) {
       for (const ann of section?.annotations ?? []) {
@@ -194,53 +182,47 @@ export async function fetchChatgptCitedDomains(keyword: string): Promise<string[
 
 export interface PerQueryGap {
   query: string
-  /** Canonical prompt id (e.g. "fcmo-c") when the query matches the 25-set */
   promptId?: string
-  /** Cluster slug ("fcmo", "psm", ...) when known */
   cluster?: string
-  /** Rokas Stan prompt type when known */
   promptType?: 'comparative' | 'task' | 'evaluative' | 'ideation'
   chatgptDomains: string[]
   googleDomains: string[]
-  overlap: number // 0..1
-  /** True if progrowth.services appears in ChatGPT's cited domains */
+  overlap: number
+  /** True if the client's brand domain appears in ChatGPT's cited domains */
   brandCitedByChatgpt: boolean
-  /** True if progrowth.services appears in Google top-10 organic */
+  /** True if the client's brand domain appears in Google top-10 organic */
   brandRankedByGoogle: boolean
 }
 
 export interface ClusterAggregate {
   clusterId: string
   promptCount: number
-  citedCount: number // ChatGPT cited progrowth.services on N of N prompts
-  citationShare: number // 0..1 — citedCount / promptCount
-  meanOverlap: number // 0..1 — mean Jaccard overlap for this cluster
-  googleRankedCount: number // ProGrowth in Google top-10 on N of N
+  citedCount: number
+  citationShare: number
+  meanOverlap: number
+  googleRankedCount: number
 }
 
 export interface GeoSeoGapResult {
   generatedAt: string
   mode: 'weekly' | 'monthly'
-  meanOverlap: number // 0..1 — higher means stronger overlap (lower "gap")
-  gapPercent: number // 100 * (1 - meanOverlap) — higher means wider gap
-  /** Citation share across this run's prompt set (0..1). For weekly, across 5; monthly, across 25. */
+  meanOverlap: number
+  gapPercent: number
   brandCitationShare: number
-  /** Per-cluster aggregate stats. Populated when prompts have canonical cluster metadata. */
   byCluster: Record<string, ClusterAggregate>
   queries: PerQueryGap[]
 }
 
-/**
- * Run one query end-to-end: fetch ChatGPT cited domains + Google top-10
- * organic in parallel, compute overlap + brand-citation flags, tag with
- * canonical prompt metadata when the query text matches the 25-set.
- */
-async function runSingleQuery(q: string): Promise<PerQueryGap> {
+async function runSingleQuery(
+  q: string,
+  promptIndex: Map<string, { id: string; cluster: string; type: PerQueryGap['promptType'] }>,
+  brandSet: Set<string>
+): Promise<PerQueryGap> {
   const [chatgpt, google] = await Promise.all([
     fetchChatgptCitedDomains(q).catch(() => []),
     fetchGoogleTop10Domains(q).catch(() => []),
   ])
-  const canonical = PROMPT_INDEX_BY_TEXT.get(q.toLowerCase())
+  const canonical = promptIndex.get(q.toLowerCase())
   return {
     query: q,
     promptId: canonical?.id,
@@ -249,21 +231,21 @@ async function runSingleQuery(q: string): Promise<PerQueryGap> {
     chatgptDomains: chatgpt,
     googleDomains: google,
     overlap: chatgptToGoogleOverlap(chatgpt, google),
-    brandCitedByChatgpt: brandCitedByChatgpt(chatgpt),
-    brandRankedByGoogle: brandRankedByGoogle(google),
+    brandCitedByChatgpt: citedDomainsContainBrand(chatgpt, brandSet),
+    brandRankedByGoogle: citedDomainsContainBrand(google, brandSet),
   }
 }
 
-/**
- * Run queries in batches to keep DataForSEO concurrency reasonable. Each
- * batch fires in parallel via Promise.all; batches run sequentially.
- * Batch size 8 keeps total wall-clock under 60s even for the full 25-set.
- */
-async function runQueriesBatched(queries: string[], batchSize = 8): Promise<PerQueryGap[]> {
+async function runQueriesBatched(
+  queries: string[],
+  promptIndex: Map<string, { id: string; cluster: string; type: PerQueryGap['promptType'] }>,
+  brandSet: Set<string>,
+  batchSize = 8
+): Promise<PerQueryGap[]> {
   const out: PerQueryGap[] = []
   for (let i = 0; i < queries.length; i += batchSize) {
     const slice = queries.slice(i, i + batchSize)
-    const results = await Promise.all(slice.map(runSingleQuery))
+    const results = await Promise.all(slice.map((q) => runSingleQuery(q, promptIndex, brandSet)))
     out.push(...results)
   }
   return out
@@ -271,17 +253,30 @@ async function runQueriesBatched(queries: string[], batchSize = 8): Promise<PerQ
 
 /**
  * Main orchestrator. Mode determines the prompt set and tagging:
- *   weekly  → GEO_SEO_PROBE_QUERIES (5 prompts, ~$1/run)
- *   monthly → CANONICAL_PROMPTS (25 prompts, ~$10/run)
+ *   weekly  → client.probe_queries (5 prompts, ~$1/run)
+ *   monthly → client.prompts ?? CANONICAL_PROMPTS (~$10/run)
  *
- * In monthly mode, the result is enriched with per-cluster aggregates
- * so the dashboard can render KPI 3 cluster breakdown.
+ * In monthly mode the result includes per-cluster aggregates so the
+ * dashboard can render the KPI 3 cluster breakdown.
  */
 export async function computeKpi5GeoSeoGap(
-  queries: string[] = GEO_SEO_PROBE_QUERIES,
+  client: Client,
+  queries?: string[],
   mode: 'weekly' | 'monthly' = 'weekly'
 ): Promise<GeoSeoGapResult> {
-  const perQuery = await runQueriesBatched(queries)
+  const promptSet = queries ?? getPromptsForMode(mode, client)
+  const clientPrompts = getPromptsForClient(client)
+  const clusters = getClustersForClient(client)
+  const brandSet = getBrandDomainSet(client)
+
+  // Reverse-index any client-side prompt by text. Falls back to the global
+  // canonical index when the client uses defaults so test/manual
+  // `?queries=` invocations still get metadata-tagged.
+  const promptIndex = buildPromptIndex(
+    clientPrompts.length > 0 ? clientPrompts : CANONICAL_PROMPTS
+  ) as unknown as Map<string, { id: string; cluster: string; type: PerQueryGap['promptType'] }>
+
+  const perQuery = await runQueriesBatched(promptSet, promptIndex, brandSet)
 
   const queriesWithChatgptData = perQuery.filter((q) => q.chatgptDomains.length > 0)
   const meanOverlap =
@@ -293,10 +288,8 @@ export async function computeKpi5GeoSeoGap(
   const citedCount = perQuery.filter((q) => q.brandCitedByChatgpt).length
   const brandCitationShare = perQuery.length > 0 ? citedCount / perQuery.length : 0
 
-  // Per-cluster aggregates — only meaningful when queries are tagged with
-  // canonical cluster metadata (i.e., monthly run against the 25-set).
   const byCluster: Record<string, ClusterAggregate> = {}
-  for (const cluster of PROMPT_CLUSTERS) {
+  for (const cluster of clusters) {
     const inCluster = perQuery.filter((q) => q.cluster === cluster.id)
     if (inCluster.length === 0) continue
     const cited = inCluster.filter((q) => q.brandCitedByChatgpt).length
@@ -316,7 +309,7 @@ export async function computeKpi5GeoSeoGap(
     generatedAt: new Date().toISOString(),
     mode,
     meanOverlap,
-    gapPercent: Math.round((1 - meanOverlap) * 1000) / 10, // 0.0..100.0
+    gapPercent: Math.round((1 - meanOverlap) * 1000) / 10,
     brandCitationShare,
     byCluster,
     queries: perQuery,

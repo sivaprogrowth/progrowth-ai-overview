@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { classifyAllProgrowthMentions } from '@/lib/sentiment'
+import { classifyAllBrandMentions } from '@/lib/sentiment'
+import { getClientFromRequest } from '@/lib/clientContext'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -8,25 +9,22 @@ export const maxDuration = 60
 /**
  * GET /api/cron/sentiment
  *
- * Classifies every ProGrowth appearance from the latest citation network
- * snapshot into one of 4 GEO-meaningful buckets: recommended, mentioned,
- * source-only, negative. Stores the result under sentinel domain
- * `__sentiment_snapshot__` so KPI 4 and the citation-network UI can read
- * it back.
+ * Classifies every brand appearance from the resolved client's latest
+ * citation network snapshot into one of 4 GEO-meaningful buckets:
+ * recommended, mentioned, source-only, negative. Stores the result under
+ * sentinel domain `__sentiment_snapshot__` (scoped by `client_id`).
  *
- * Auth handled by middleware (/api/cron/* accepts Bearer BATCH_API_KEY or
- * CRON_SECRET, plus session cookies).
+ * Multi-tenant: client comes from ?client=<slug>, the client_slug cookie,
+ * or the default ('progrowth'). Auth handled by middleware.
  *
- * Cost: roughly $0.10 per mention (one engine re-query + one gpt-4o-mini
- * classifier call). Linear in brand visibility, which is the right cost
- * model — costs nothing when we're invisible, grows naturally as
- * citations grow.
- *
- * Re-run cadence: after each citation network refresh (quarterly), and
- * on demand when investigating a specific cell. Not a Vercel cron — the
- * input snapshot is itself stable for ~quarter.
+ * Cost: roughly $0.10 per mention (one engine re-query + one classifier
+ * call). Linear in brand visibility — costs nothing when invisible.
  */
-export async function GET(_req: NextRequest) {
-  const summary = await classifyAllProgrowthMentions()
-  return NextResponse.json(summary)
+export async function GET(req: NextRequest) {
+  const client = await getClientFromRequest(req)
+  const summary = await classifyAllBrandMentions(client)
+  return NextResponse.json({
+    ...summary,
+    client: { id: client.id, slug: client.slug },
+  })
 }

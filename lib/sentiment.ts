@@ -25,6 +25,7 @@
  */
 
 import { ALL_ENGINES, type Engine } from './citationNetwork'
+import { type Client, buildBrandMatchPatterns, getBrandDomainSet } from './clients'
 
 const DATAFORSEO_BASE = 'https://api.dataforseo.com/v3'
 
@@ -154,30 +155,22 @@ function parseDomain(input: string | undefined | null): string | null {
   }
 }
 
-// ── Mention detection in body text ─────────────────────────────────────────
-
-const PROGROWTH_NAME_PATTERNS = [
-  /pro\s*growth(?:\s+services|\s+group)?/gi,
-  /progrowth\.services/gi,
-]
-
-const PROGROWTH_DOMAINS = new Set(['progrowth.services', 'www.progrowth.services'])
+// ── Mention detection in body text (per-client) ───────────────────────────
 
 /**
- * Find the snippet around the first ProGrowth mention in the text.
- * Returns null if the name doesn't appear in the body (= source-only).
+ * Find the snippet around the first occurrence of any client brand pattern
+ * in the response text. Returns null if no pattern matches (= source-only).
  * Snippet is ±250 chars around the match, trimmed at sentence boundaries
  * where possible.
  */
-function findMentionSnippet(text: string): string | null {
-  for (const pattern of PROGROWTH_NAME_PATTERNS) {
+function findMentionSnippet(text: string, patterns: RegExp[]): string | null {
+  for (const pattern of patterns) {
     pattern.lastIndex = 0
     const m = pattern.exec(text)
     if (m && m.index !== undefined) {
       const start = Math.max(0, m.index - 250)
       const end = Math.min(text.length, m.index + m[0].length + 250)
       let snippet = text.slice(start, end).trim()
-      // Trim to sentence boundary if we cut into the middle of one
       if (start > 0) {
         const firstDot = snippet.indexOf('. ')
         if (firstDot > 0 && firstDot < 80) snippet = snippet.slice(firstDot + 2)
@@ -190,24 +183,34 @@ function findMentionSnippet(text: string): string | null {
 
 // ── LLM-based framing classifier ───────────────────────────────────────────
 
-const CLASSIFICATION_PROMPT = `You are classifying how a brand is mentioned in an AI assistant's response.
+/**
+ * Build the per-client framing-classifier prompt. The brand description
+ * comes from `clients.brand_description` and serves both as context for
+ * the LLM and as the canonical-name reference (so the classifier
+ * understands "ProGrowth" / "Acme" / etc.).
+ */
+function buildClassificationPrompt(client: Client, snippet: string): string {
+  const safeBrand = client.brand_description || `${client.company_name} (${client.primary_domain})`
+  return `You are classifying how a brand is mentioned in an AI assistant's response.
 
-Brand: ProGrowth (progrowth.services) — a B2B marketing agency
-Response snippet: """{{snippet}}"""
+Brand: ${safeBrand}
+Response snippet: """${snippet.slice(0, 2000)}"""
 
 Pick ONE label that best describes the framing:
-- "recommended": the response names ProGrowth as one of the recommended providers / answers to the user's question
-- "mentioned": ProGrowth's name appears but not as a primary recommendation (e.g., comparison aside, supporting fact, brief reference)
-- "negative": the response says something explicitly unfavourable about ProGrowth
+- "recommended": the response names ${client.company_name} as one of the recommended providers / answers to the user's question
+- "mentioned": ${client.company_name}'s name appears but not as a primary recommendation (e.g., comparison aside, supporting fact, brief reference)
+- "negative": the response says something explicitly unfavourable about ${client.company_name}
 
 Reply in this EXACT format (one line each, no extra text):
 LABEL: <one of recommended|mentioned|negative>
 REASONING: <one sentence, max 25 words>`
+}
 
 async function classifyFraming(
+  client: Client,
   snippet: string
 ): Promise<{ type: Exclude<MentionType, 'source-only'>; reasoning: string }> {
-  const prompt = CLASSIFICATION_PROMPT.replace('{{snippet}}', snippet.slice(0, 2000))
+  const prompt = buildClassificationPrompt(client, snippet)
   try {
     const res = await fetch(`${DATAFORSEO_BASE}/ai_optimization/chat_gpt/llm_responses/live`, {
       method: 'POST',
@@ -240,11 +243,15 @@ export interface AppearanceInput {
 }
 
 /**
- * Classify a single ProGrowth appearance by re-querying the engine,
- * checking whether the brand name appears in the visible body, and
- * (if so) asking an LLM to label the framing.
+ * Classify a single brand appearance by re-querying the engine,
+ * checking whether the client's brand name appears in the visible
+ * body, and (if so) asking an LLM to label the framing.
+ *
+ * `client` provides the brand domain set + regex patterns used to
+ * detect mentions and the brand description fed to the classifier.
  */
 export async function classifyAppearance(
+  client: Client,
   input: AppearanceInput
 ): Promise<MentionClassification> {
   const response = await fetchEngineResponse(input.engine, input.query)
@@ -261,10 +268,13 @@ export async function classifyAppearance(
     }
   }
 
-  // Sanity-check: ProGrowth must still be cited in this re-fetch.
-  // Engine answers vary across runs; if it dropped out, treat as missing.
-  const stillCited = response.citedDomains.some((d) => PROGROWTH_DOMAINS.has(d))
-  const snippet = findMentionSnippet(response.text)
+  const brandDomains = getBrandDomainSet(client)
+  const brandPatterns = buildBrandMatchPatterns(client)
+
+  // Sanity-check: brand must still be cited in this re-fetch. Engine
+  // answers vary across runs; if it dropped out, treat as missing.
+  const stillCited = response.citedDomains.some((d) => brandDomains.has(d))
+  const snippet = findMentionSnippet(response.text, brandPatterns)
 
   if (!stillCited && !snippet) {
     return {
@@ -272,7 +282,7 @@ export async function classifyAppearance(
       type: 'source-only',
       score: TYPE_SCORE['source-only'],
       snippet: null,
-      reasoning: 'ProGrowth not cited or named in this fresh response (engine variance)',
+      reasoning: `${client.company_name} not cited or named in this fresh response (engine variance)`,
       classifiedAt,
     }
   }
@@ -288,7 +298,7 @@ export async function classifyAppearance(
     }
   }
 
-  const { type, reasoning } = await classifyFraming(snippet)
+  const { type, reasoning } = await classifyFraming(client, snippet)
   return {
     ...input,
     type,
@@ -300,34 +310,33 @@ export async function classifyAppearance(
 }
 
 /**
- * Classify all known ProGrowth appearances from the latest citation
- * network snapshot stored in Supabase.
+ * Classify all known brand appearances for `client` from the latest
+ * citation network snapshot stored in Supabase.
  *
  * Each appearance costs roughly $0.10 (one engine query + one classifier
- * call). Today's footprint = 2 appearances = ~$0.20 per pass. Scales
- * with brand visibility, which is exactly the right cost model.
+ * call). Scales linearly with brand visibility — costs nothing when
+ * the client is invisible, grows naturally as citations grow.
  */
-export async function classifyAllProgrowthMentions(): Promise<SentimentSummary> {
+export async function classifyAllBrandMentions(client: Client): Promise<SentimentSummary> {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return emptySummary('Supabase not configured')
   }
   const { supabase } = await import('@/lib/supabase')
   const { fetchCitationNetworkSnapshot } = await import('@/lib/citationNetworkFetcher')
 
-  const snapshot = await fetchCitationNetworkSnapshot()
-  if (!snapshot || snapshot.progrowthAppearances.length === 0) {
-    return emptySummary('no ProGrowth appearances in latest citation network snapshot')
+  const snapshot = await fetchCitationNetworkSnapshot(client)
+  if (!snapshot || snapshot.brandAppearances.length === 0) {
+    return emptySummary(`no ${client.company_name} appearances in latest citation network snapshot`)
   }
 
-  const inputs: AppearanceInput[] = snapshot.progrowthAppearances.map((a) => ({
+  const inputs: AppearanceInput[] = snapshot.brandAppearances.map((a) => ({
     promptId: a.promptId,
     cluster: a.clusterId,
     engine: a.engine,
     query: a.prompt,
   }))
 
-  // Run classifications in parallel (only ~2-10 typical)
-  const classifications = await Promise.all(inputs.map((i) => classifyAppearance(i)))
+  const classifications = await Promise.all(inputs.map((i) => classifyAppearance(client, i)))
 
   const byType: Record<MentionType, number> = {
     recommended: 0,
@@ -350,10 +359,10 @@ export async function classifyAllProgrowthMentions(): Promise<SentimentSummary> 
     classifications,
   }
 
-  // Persist as a sentinel analyses row, same pattern as KPI 5 + Task 22
   await supabase.from('analyses').insert({
-    email: 'system@progrowth.services',
+    email: client.notification_email ?? 'system@progrowth.services',
     domain: '__sentiment_snapshot__',
+    client_id: client.id,
     keywords: inputs.map((i) => i.query),
     summary: {
       source: 'sentiment',
@@ -370,7 +379,6 @@ export async function classifyAllProgrowthMentions(): Promise<SentimentSummary> 
       type: c.type,
       score: c.score,
       reasoning: c.reasoning,
-      // Truncate snippet to keep row size manageable
       snippet: c.snippet?.slice(0, 600) ?? null,
     })),
   })

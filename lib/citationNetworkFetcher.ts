@@ -7,13 +7,16 @@
  * function timeout). The fetcher picks the latest row per cluster_id and
  * merges them into a single matrix.
  *
- * Also derives the "earned media gold" cross-engine rollups (domains
- * appearing in 2+ engines for the same cluster) since these drive the
- * Task 18 outreach sequence.
+ * Multi-tenant: the snapshot is scoped to a Client. The fetcher filters
+ * Supabase rows by `client_id` and uses the client's verticals for
+ * cluster name lookup. Legacy snapshots that carry only `progrowthAppearances`
+ * (no `brandAppearances`) are normalised on read for back-compat — see
+ * `readAppearances()`.
  */
 
-import { PROMPT_CLUSTERS } from './prompts'
+import { getClustersForClient } from './prompts'
 import { ALL_ENGINES, type DomainRank, type Engine } from './citationNetwork'
+import type { Client } from './clients'
 
 export interface CrossEngineTarget {
   clusterId: string
@@ -26,7 +29,7 @@ export interface CrossEngineTarget {
 
 export type MentionType = 'recommended' | 'mentioned' | 'source-only' | 'negative'
 
-export interface ProgrowthAppearance {
+export interface BrandAppearance {
   clusterId: string
   clusterName: string
   engine: Engine
@@ -48,39 +51,78 @@ export interface CitationNetworkSnapshot {
   clustersCovered: string[]
   perCell: Record<string /* clusterId */, Record<Engine, DomainRank[]>>
   crossEngineTargets: CrossEngineTarget[]
-  progrowthAppearances: ProgrowthAppearance[]
+  brandAppearances: BrandAppearance[]
   /** Latest sentiment snapshot timestamp, if any (null = none ever run) */
   sentimentClassifiedAt: string | null
 }
 
-export async function fetchCitationNetworkSnapshot(): Promise<CitationNetworkSnapshot | null> {
+interface StoredAppearance {
+  clusterId: string
+  engine: Engine
+  promptId: string
+  prompt: string
+}
+
+/**
+ * Back-compat: reads either the new `brandAppearances` field or the legacy
+ * `progrowthAppearances` field from a stored snapshot summary. Snapshots
+ * written before Phase 1 of the multi-tenant migration only carry the
+ * legacy name.
+ */
+function readAppearances(summary: any): StoredAppearance[] {
+  if (Array.isArray(summary?.brandAppearances)) return summary.brandAppearances
+  if (Array.isArray(summary?.progrowthAppearances)) return summary.progrowthAppearances
+  return []
+}
+
+/**
+ * Back-compat: every DomainRank carries `isClientBrand` going forward but
+ * stored rows still have `isProgrowth`. Normalise on read so downstream
+ * UI never has to branch.
+ */
+function normaliseDomainRanks(perCell: Record<string, Record<Engine, any[]>>): Record<string, Record<Engine, DomainRank[]>> {
+  const out: Record<string, Record<Engine, DomainRank[]>> = {}
+  for (const [clusterId, engines] of Object.entries(perCell)) {
+    out[clusterId] = {} as Record<Engine, DomainRank[]>
+    for (const [engine, ranks] of Object.entries(engines)) {
+      out[clusterId][engine as Engine] = (ranks ?? []).map((r: any) => ({
+        domain: r.domain,
+        hits: r.hits,
+        isClientBrand: r.isClientBrand ?? r.isProgrowth ?? false,
+      }))
+    }
+  }
+  return out
+}
+
+export async function fetchCitationNetworkSnapshot(client: Client): Promise<CitationNetworkSnapshot | null> {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return null
   }
   const { supabase } = await import('@/lib/supabase')
 
-  // Pull recent snapshots; we'll pick the latest per cluster client-side.
+  // Pull recent snapshots for this client; pick the latest per cluster.
   // Capping at 50 is plenty because we re-run quarterly.
   const { data, error } = await supabase
     .from('analyses')
     .select('summary, keywords, created_at')
+    .eq('client_id', client.id)
     .eq('domain', '__citation_network_snapshot__')
     .order('created_at', { ascending: false })
     .limit(50)
 
   if (error || !data || data.length === 0) return null
 
-  const clusterNameById = new Map(PROMPT_CLUSTERS.map((c) => [c.id, c.name]))
+  const clusters = getClustersForClient(client)
+  const clusterNameById = new Map(clusters.map((c) => [c.id, c.name]))
   const latestPerCluster = new Map<string, { summary: any; created_at: string }>()
   let mostRecentAt: string | null = null
 
   for (const row of data) {
     const s = row.summary as any
-    const perCell = s?.perCell as Record<string, Record<Engine, DomainRank[]>> | undefined
-    if (!perCell) continue
-    // Each snapshot row carries only the clusters that were in that run; pick
-    // the latest row per cluster slug.
-    for (const clusterId of Object.keys(perCell)) {
+    const perCellRaw = s?.perCell as Record<string, Record<Engine, any[]>> | undefined
+    if (!perCellRaw) continue
+    for (const clusterId of Object.keys(perCellRaw)) {
       if (!latestPerCluster.has(clusterId)) {
         latestPerCluster.set(clusterId, { summary: s, created_at: row.created_at })
       }
@@ -90,17 +132,17 @@ export async function fetchCitationNetworkSnapshot(): Promise<CitationNetworkSna
 
   if (latestPerCluster.size === 0) return null
 
-  // Assemble the merged matrix
   const perCell: Record<string, Record<Engine, DomainRank[]>> = {}
-  const allAppearances: ProgrowthAppearance[] = []
+  const allAppearances: BrandAppearance[] = []
   let promptsRun = 0
   const seenAppearance = new Set<string>()
 
   for (const [clusterId, { summary }] of latestPerCluster) {
-    const cellsForCluster = summary.perCell?.[clusterId]
+    const normalised = normaliseDomainRanks(summary.perCell ?? {})
+    const cellsForCluster = normalised[clusterId]
     if (cellsForCluster) perCell[clusterId] = cellsForCluster
     promptsRun = Math.max(promptsRun, summary.promptsRun ?? 0)
-    for (const app of (summary.progrowthAppearances ?? []) as any[]) {
+    for (const app of readAppearances(summary)) {
       if (app.clusterId !== clusterId) continue
       const key = `${app.clusterId}|${app.engine}|${app.promptId}`
       if (seenAppearance.has(key)) continue
@@ -142,15 +184,16 @@ export async function fetchCitationNetworkSnapshot(): Promise<CitationNetworkSna
     }
   }
 
-  crossEngineTargets.sort((a, b) =>
-    b.engineCount - a.engineCount ||
-    b.totalHits - a.totalHits ||
-    a.clusterId.localeCompare(b.clusterId) ||
-    a.domain.localeCompare(b.domain)
+  crossEngineTargets.sort(
+    (a, b) =>
+      b.engineCount - a.engineCount ||
+      b.totalHits - a.totalHits ||
+      a.clusterId.localeCompare(b.clusterId) ||
+      a.domain.localeCompare(b.domain)
   )
 
   // Merge in latest sentiment classifications, if a snapshot exists.
-  const sentimentSnapshot = await fetchLatestSentimentSnapshot()
+  const sentimentSnapshot = await fetchLatestSentimentSnapshot(client)
   let sentimentClassifiedAt: string | null = null
   if (sentimentSnapshot) {
     sentimentClassifiedAt = sentimentSnapshot.classifiedAt
@@ -177,7 +220,7 @@ export async function fetchCitationNetworkSnapshot(): Promise<CitationNetworkSna
     clustersCovered: Array.from(latestPerCluster.keys()),
     perCell,
     crossEngineTargets,
-    progrowthAppearances: allAppearances,
+    brandAppearances: allAppearances,
     sentimentClassifiedAt,
   }
 }
@@ -192,7 +235,7 @@ interface SentimentRow {
   snippet: string | null
 }
 
-async function fetchLatestSentimentSnapshot(): Promise<{
+async function fetchLatestSentimentSnapshot(client: Client): Promise<{
   classifiedAt: string
   classifications: SentimentRow[]
 } | null> {
@@ -202,6 +245,7 @@ async function fetchLatestSentimentSnapshot(): Promise<{
   const { data, error } = await supabase
     .from('analyses')
     .select('rows, created_at')
+    .eq('client_id', client.id)
     .eq('domain', '__sentiment_snapshot__')
     .order('created_at', { ascending: false })
     .limit(1)

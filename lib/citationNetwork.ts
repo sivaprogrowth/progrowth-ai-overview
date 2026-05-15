@@ -1,7 +1,7 @@
 /**
- * Per-engine citation network mapping (Task 22).
+ * Per-engine citation network mapping (Task 22 / multi-tenant Phase 1).
  *
- * Runs the 25 canonical prompts against ChatGPT + Claude + Perplexity +
+ * Runs the active prompt set against ChatGPT + Claude + Perplexity +
  * Gemini, extracts cited domains per (cluster × engine) cell, and ranks
  * the top 15 domains per cell by frequency.
  *
@@ -10,12 +10,21 @@
  * source ecosystems — the matrix shows which outlets dominate each one
  * so we know where to invest per-engine effort.
  *
+ * Multi-tenant note: brand-domain detection is parameterised on the
+ * `Client` arg. The function no longer knows about ProGrowth specifically;
+ * it flags any domain in `client.alt_domains ∪ {client.primary_domain}`
+ * as the client's brand. JSON snapshot field names keep the legacy
+ * "progrowth" wording so historical Supabase rows continue to deserialise
+ * (see citationNetworkFetcher.ts back-compat read).
+ *
  * Cost per full run: ~$7.25 across all 25 prompts × 4 engines.
  * Designed as a one-shot endpoint (not a cron) — outlet rankings don't
  * change week-over-week. Re-run quarterly or when strategy shifts.
  */
 
-import { CANONICAL_PROMPTS, PROMPT_CLUSTERS, type CanonicalPrompt } from './prompts'
+import { type CanonicalPrompt } from './prompts'
+import { getPromptsForClient, getClustersForClient } from './prompts'
+import { type Client, getBrandDomainSet } from './clients'
 
 const DATAFORSEO_BASE = 'https://api.dataforseo.com/v3'
 
@@ -39,8 +48,6 @@ function extractDomain(input: string | undefined | null): string | null {
 export type Engine = 'chatgpt' | 'claude' | 'perplexity' | 'gemini'
 
 export const ALL_ENGINES: Engine[] = ['chatgpt', 'claude', 'perplexity', 'gemini']
-
-const PROGROWTH_DOMAINS = new Set(['progrowth.services', 'www.progrowth.services'])
 
 // ── Per-engine cited-domain fetchers ──────────────────────────────────────
 
@@ -89,30 +96,25 @@ function parseCitations(engine: Engine, data: any): string[] {
   const domains = new Set<string>()
 
   for (const item of items) {
-    // ChatGPT / Claude: annotations live under sections[*].annotations[*]
     for (const section of item?.sections ?? []) {
       for (const ann of section?.annotations ?? []) {
         const d = extractDomain(ann.url)
         if (d) domains.add(d)
       }
     }
-    // ChatGPT / Claude alt: annotations directly on item
     for (const ann of item?.annotations ?? []) {
       const d = extractDomain(ann.url)
       if (d) domains.add(d)
     }
-    // Perplexity: typically `references` array on item OR sections
     for (const ref of item?.references ?? []) {
       const d = extractDomain(ref.url)
       if (d) domains.add(d)
     }
-    // Gemini AI Mode: references on item (15 refs per query in our tests)
     if (engine === 'gemini') {
       for (const ref of item?.references ?? []) {
         const d = extractDomain(ref.url)
         if (d) domains.add(d)
       }
-      // Also try `links` field which sometimes carries them
       for (const link of item?.links ?? []) {
         const d = extractDomain(link.url)
         if (d) domains.add(d)
@@ -127,8 +129,11 @@ function parseCitations(engine: Engine, data: any): string[] {
 
 export interface DomainRank {
   domain: string
-  hits: number // number of prompts in this cell where this domain was cited
-  isProgrowth: boolean
+  hits: number
+  /** True if this domain is in the client's brand domain set. Field kept as
+   *  `isClientBrand` going forward; legacy `isProgrowth` is read by the
+   *  fetcher's back-compat layer. */
+  isClientBrand: boolean
 }
 
 export interface PerPromptResult {
@@ -136,41 +141,43 @@ export interface PerPromptResult {
   citations: Record<Engine, string[]>
 }
 
+export interface BrandAppearance {
+  clusterId: string
+  engine: Engine
+  promptId: string
+  prompt: string
+}
+
 export interface CitationNetworkMatrix {
   generatedAt: string
   promptsRun: number
   engines: Engine[]
-  /** Top-15 domains per (cluster × engine) cell, by hit count */
   perCell: Record<string /* clusterId */, Record<Engine, DomainRank[]>>
-  /** Where ProGrowth appears in any cell, for highlighting wins */
-  progrowthAppearances: Array<{
-    clusterId: string
-    engine: Engine
-    promptId: string
-    prompt: string
-  }>
-  /** Top-15 domains across ALL clusters, per engine */
+  brandAppearances: BrandAppearance[]
   topByEngine: Record<Engine, DomainRank[]>
-  /** Per-prompt raw data for debugging + Supabase storage */
   perPrompt: PerPromptResult[]
 }
 
 /**
- * Run all engines against all prompts and aggregate into the matrix.
- * Batches prompts 5-at-a-time (each firing 4 engine calls in parallel)
- * so up to 20 concurrent DataForSEO calls per wave. With ~3s per call,
- * 25 prompts complete in 5 batches × ~3s = ~15s — well under the 60s
+ * Run all engines against the client's active prompt set and aggregate
+ * into the matrix. Batches prompts 5-at-a-time (each firing 4 engine
+ * calls in parallel) — 25 prompts complete in ~15s, well under the 60s
  * Vercel Hobby function timeout.
  */
 export async function computeCitationNetwork(
-  prompts: CanonicalPrompt[] = CANONICAL_PROMPTS,
+  client: Client,
+  prompts?: CanonicalPrompt[],
   engines: Engine[] = ALL_ENGINES
 ): Promise<CitationNetworkMatrix> {
+  const promptSet = prompts ?? getPromptsForClient(client)
+  const clusters = getClustersForClient(client)
+  const brandDomains = getBrandDomainSet(client)
+
   const perPrompt: PerPromptResult[] = []
   const PROMPT_BATCH = 5
 
-  for (let i = 0; i < prompts.length; i += PROMPT_BATCH) {
-    const slice = prompts.slice(i, i + PROMPT_BATCH)
+  for (let i = 0; i < promptSet.length; i += PROMPT_BATCH) {
+    const slice = promptSet.slice(i, i + PROMPT_BATCH)
     const batchResults = await Promise.all(
       slice.map(async (prompt) => {
         const engineResults = await Promise.all(
@@ -185,7 +192,7 @@ export async function computeCitationNetwork(
 
   // Build per-cell counts: cluster → engine → Map<domain, hits>
   const cellMaps: Record<string, Record<Engine, Map<string, number>>> = {}
-  for (const cluster of PROMPT_CLUSTERS) {
+  for (const cluster of clusters) {
     cellMaps[cluster.id] = Object.fromEntries(
       engines.map((e) => [e, new Map<string, number>()])
     ) as Record<Engine, Map<string, number>>
@@ -201,7 +208,6 @@ export async function computeCitationNetwork(
     }
   }
 
-  // Sort + top-15 per cell
   const perCell: Record<string, Record<Engine, DomainRank[]>> = {}
   for (const [clusterId, engineMaps] of Object.entries(cellMaps)) {
     perCell[clusterId] = Object.fromEntries(
@@ -210,7 +216,7 @@ export async function computeCitationNetwork(
           .map(([domain, hits]) => ({
             domain,
             hits,
-            isProgrowth: PROGROWTH_DOMAINS.has(domain),
+            isClientBrand: brandDomains.has(domain),
           }))
           .sort((a, b) => b.hits - a.hits || a.domain.localeCompare(b.domain))
           .slice(0, 15)
@@ -219,7 +225,6 @@ export async function computeCitationNetwork(
     ) as Record<Engine, DomainRank[]>
   }
 
-  // Top-15 per engine across all clusters
   const engineTotals: Record<Engine, Map<string, number>> = Object.fromEntries(
     engines.map((e) => [e, new Map<string, number>()])
   ) as Record<Engine, Map<string, number>>
@@ -240,19 +245,18 @@ export async function computeCitationNetwork(
         .map(([domain, hits]) => ({
           domain,
           hits,
-          isProgrowth: PROGROWTH_DOMAINS.has(domain),
+          isClientBrand: brandDomains.has(domain),
         }))
         .sort((a, b) => b.hits - a.hits || a.domain.localeCompare(b.domain))
         .slice(0, 15),
     ])
   ) as Record<Engine, DomainRank[]>
 
-  // ProGrowth appearances
-  const progrowthAppearances: CitationNetworkMatrix['progrowthAppearances'] = []
+  const brandAppearances: BrandAppearance[] = []
   for (const { prompt, citations } of perPrompt) {
     for (const engine of engines) {
-      if ((citations[engine] ?? []).some((d) => PROGROWTH_DOMAINS.has(d))) {
-        progrowthAppearances.push({
+      if ((citations[engine] ?? []).some((d) => brandDomains.has(d))) {
+        brandAppearances.push({
           clusterId: prompt.cluster,
           engine,
           promptId: prompt.id,
@@ -264,10 +268,10 @@ export async function computeCitationNetwork(
 
   return {
     generatedAt: new Date().toISOString(),
-    promptsRun: prompts.length,
+    promptsRun: promptSet.length,
     engines,
     perCell,
-    progrowthAppearances,
+    brandAppearances,
     topByEngine,
     perPrompt,
   }

@@ -3,13 +3,12 @@
 import { useState } from 'react'
 import { ALL_ENGINES, type Engine } from '@/lib/citationNetwork'
 import type { CitationNetworkSnapshot, MentionType } from '@/lib/citationNetworkFetcher'
-import { PROMPT_CLUSTERS } from '@/lib/prompts'
 
 const SENTIMENT_STYLE: Record<MentionType, { label: string; chip: string; description: string }> = {
   recommended: {
     label: 'Recommended',
     chip: 'bg-lime-500/20 text-lime-300 border-lime-500/40',
-    description: 'Engine names ProGrowth as one of the answers',
+    description: 'Engine names the brand as one of the answers',
   },
   mentioned: {
     label: 'Mentioned',
@@ -28,8 +27,20 @@ const SENTIMENT_STYLE: Record<MentionType, { label: string; chip: string; descri
   },
 }
 
+interface ClusterMeta {
+  id: string
+  name: string
+}
+
 interface Props {
   snapshot: CitationNetworkSnapshot | null
+  /** Lightweight client meta — used for labels and the curl example shown in
+   *  the empty state. The parent server component shouldn't pass the full
+   *  Client object because this component runs in the browser. */
+  client: { slug: string; company_name: string }
+  /** Cluster taxonomy for THIS client. Falls back to ProGrowth defaults via
+   *  the parent if the client has no overrides configured. */
+  clusters: ClusterMeta[]
 }
 
 const ENGINE_STYLE: Record<Engine, { label: string; chip: string }> = {
@@ -56,21 +67,21 @@ function formatDate(iso: string | null): string {
   })
 }
 
-export default function CitationNetworkView({ snapshot }: Props) {
+export default function CitationNetworkView({ snapshot, client, clusters }: Props) {
   const [activeCluster, setActiveCluster] = useState<string>(
-    snapshot?.clustersCovered[0] ?? PROMPT_CLUSTERS[0].id
+    snapshot?.clustersCovered[0] ?? clusters[0]?.id ?? ''
   )
 
   if (!snapshot) {
     return (
       <div className='rounded-lg border border-gray-800 bg-gray-900 p-8 text-center'>
         <p className='text-gray-400'>
-          No citation network snapshot found in Supabase yet.
+          No citation network snapshot for <span className='text-white'>{client.company_name}</span> yet.
         </p>
         <p className='text-gray-500 mt-2 text-sm'>
           Trigger one via{' '}
           <code className='text-lime-400'>
-            curl -H &apos;Authorization: Bearer $BATCH_API_KEY&apos; $HOST/api/cron/citation-network?clusters=fcmo
+            curl -H &apos;Authorization: Bearer $BATCH_API_KEY&apos; $HOST/api/cron/citation-network?client={client.slug}
           </code>
         </p>
       </div>
@@ -83,26 +94,26 @@ export default function CitationNetworkView({ snapshot }: Props) {
 
   const activeCells = snapshot.perCell[activeCluster] ?? {}
   const clusterName =
-    PROMPT_CLUSTERS.find((c) => c.id === activeCluster)?.name ?? activeCluster
+    clusters.find((c) => c.id === activeCluster)?.name ?? activeCluster
 
   return (
     <div className='space-y-8'>
       <div className='grid grid-cols-1 sm:grid-cols-4 gap-3'>
         <Stat label='Last run' value={formatDate(snapshot.generatedAt)} />
-        <Stat label='Clusters covered' value={`${snapshot.clustersCovered.length} / ${PROMPT_CLUSTERS.length}`} />
+        <Stat label='Clusters covered' value={`${snapshot.clustersCovered.length} / ${clusters.length}`} />
         <Stat label='Prompts × engines' value={`${snapshot.promptsRun * snapshot.clustersCovered.length} · 4`} />
         <Stat
-          label='ProGrowth citations'
-          value={String(snapshot.progrowthAppearances.length)}
-          highlight={snapshot.progrowthAppearances.length > 0}
+          label={`${client.company_name} citations`}
+          value={String(snapshot.brandAppearances.length)}
+          highlight={snapshot.brandAppearances.length > 0}
         />
       </div>
 
-      {snapshot.progrowthAppearances.length > 0 && (
+      {snapshot.brandAppearances.length > 0 && (
         <section>
           <div className='flex items-end justify-between mb-3 flex-wrap gap-2'>
             <h2 className='text-lg font-semibold text-white'>
-              Where ProGrowth gets cited
+              Where {client.company_name} gets cited
             </h2>
             {snapshot.sentimentClassifiedAt ? (
               <span className='text-xs text-gray-500'>
@@ -125,7 +136,7 @@ export default function CitationNetworkView({ snapshot }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {snapshot.progrowthAppearances.map((app, i) => (
+                {snapshot.brandAppearances.map((app, i) => (
                   <tr key={i} className='border-b border-gray-800/40 last:border-0 align-top'>
                     <td className='px-4 py-3 text-gray-300'>{app.clusterName}</td>
                     <td className='px-4 py-3'>
@@ -197,7 +208,7 @@ export default function CitationNetworkView({ snapshot }: Props) {
           Top domains by cluster × engine
         </h2>
         <div className='flex flex-wrap gap-2 mb-4'>
-          {PROMPT_CLUSTERS.map((c) => {
+          {clusters.map((c) => {
             const covered = snapshot.clustersCovered.includes(c.id)
             const active = c.id === activeCluster
             return (
@@ -241,14 +252,14 @@ export default function CitationNetworkView({ snapshot }: Props) {
                     <li
                       key={r.domain}
                       className={`flex items-center justify-between px-3 py-1.5 border-b border-gray-800/40 last:border-0 ${
-                        r.isProgrowth ? 'bg-lime-500/10' : ''
+                        r.isClientBrand ? 'bg-lime-500/10' : ''
                       }`}
                     >
                       <span className='flex items-center gap-2 min-w-0'>
                         <span className='text-gray-500 text-xs w-5 shrink-0'>{i + 1}.</span>
                         <span
                           className={`truncate ${
-                            r.isProgrowth ? 'text-lime-300 font-medium' : 'text-gray-300'
+                            r.isClientBrand ? 'text-lime-300 font-medium' : 'text-gray-300'
                           }`}
                           title={r.domain}
                         >

@@ -13,8 +13,9 @@
 
 import nodemailer from 'nodemailer'
 import { fetchKPIScorecard, type KPICard } from './scorecard'
+import type { Client } from './clients'
 
-const DEFAULT_RECIPIENT = process.env.DIGEST_EMAIL_RECIPIENT || 'siva@progrowth.services'
+const FALLBACK_RECIPIENT = process.env.DIGEST_EMAIL_RECIPIENT || 'siva@progrowth.services'
 const FROM_ADDRESS = '"ProGrowth GEO Scorecard" <siva@progrowth.services>'
 
 const transporter = nodemailer.createTransport({
@@ -102,19 +103,20 @@ function buildCardHtml(card: KPICard): string {
   `
 }
 
-function buildDigestHtml(cards: KPICard[], snapshotDate: string): string {
+function buildDigestHtml(client: Client, cards: KPICard[], snapshotDate: string): string {
+  const dashboardUrl = `https://aioverviews.progrowth.services/clients/${client.slug}/scorecard`
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#f9fafb;color:#111827;">
   <div style="max-width:640px;margin:0 auto;padding:24px;">
     <div style="margin-bottom:24px;">
-      <div style="color:#84cc16;font-weight:700;font-size:14px;letter-spacing:1px;text-transform:uppercase;">ProGrowth · Weekly GEO Scorecard</div>
+      <div style="color:#84cc16;font-weight:700;font-size:14px;letter-spacing:1px;text-transform:uppercase;">ProGrowth · Weekly GEO Scorecard for ${client.company_name}</div>
       <div style="color:#6b7280;font-size:13px;margin-top:4px;">${snapshotDate}</div>
     </div>
     ${cards.map(buildCardHtml).join('')}
     <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">
-      Live dashboard: <a href="https://aioverviews.progrowth.services/scorecard" style="color:#84cc16;">aioverviews.progrowth.services/scorecard</a><br/>
+      Live dashboard: <a href="${dashboardUrl}" style="color:#84cc16;">${dashboardUrl.replace(/^https?:\/\//, '')}</a><br/>
       KPI definitions: <code>~/ProGrowth_GEO_KPI_Scorecard.md</code>
     </div>
   </div>
@@ -122,8 +124,9 @@ function buildDigestHtml(cards: KPICard[], snapshotDate: string): string {
 </html>`
 }
 
-function buildDigestText(cards: KPICard[], snapshotDate: string): string {
-  const lines = [`PROGROWTH WEEKLY GEO SCORECARD — ${snapshotDate}`, '']
+function buildDigestText(client: Client, cards: KPICard[], snapshotDate: string): string {
+  const dashboardUrl = `https://aioverviews.progrowth.services/clients/${client.slug}/scorecard`
+  const lines = [`PROGROWTH WEEKLY GEO SCORECARD — ${client.company_name} — ${snapshotDate}`, '']
   for (const c of cards) {
     lines.push(`KPI ${c.id} · ${c.name}  [${c.status.toUpperCase()}]`)
     lines.push(`  ${c.question}`)
@@ -139,7 +142,7 @@ function buildDigestText(cards: KPICard[], snapshotDate: string): string {
     lines.push('')
   }
   lines.push('---')
-  lines.push('Dashboard: https://aioverviews.progrowth.services/scorecard')
+  lines.push(`Dashboard: ${dashboardUrl}`)
   return lines.join('\n')
 }
 
@@ -151,40 +154,42 @@ export interface DigestSendResult {
   kpiCount: number
 }
 
-export async function sendScorecardDigest(toEmail: string = DEFAULT_RECIPIENT): Promise<DigestSendResult> {
+export async function sendScorecardDigest(client: Client, toEmail?: string): Promise<DigestSendResult> {
+  const recipient = toEmail ?? client.notification_email ?? FALLBACK_RECIPIENT
+
   if (!process.env.BREVO_SMTP_USER || !process.env.BREVO_SMTP_PASS) {
-    return { sent: false, recipient: toEmail, error: 'Brevo SMTP credentials not configured', kpiCount: 0 }
+    return { sent: false, recipient, error: 'Brevo SMTP credentials not configured', kpiCount: 0 }
   }
 
   try {
-    const cards = await fetchKPIScorecard()
+    const cards = await fetchKPIScorecard(client)
     const snapshotDate = new Date().toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric',
     })
-    const html = buildDigestHtml(cards, snapshotDate)
-    const text = buildDigestText(cards, snapshotDate)
+    const html = buildDigestHtml(client, cards, snapshotDate)
+    const text = buildDigestText(client, cards, snapshotDate)
 
     const result = await transporter.sendMail({
       from: FROM_ADDRESS,
-      to: toEmail,
-      subject: `GEO Scorecard · ${snapshotDate}`,
+      to: recipient,
+      subject: `GEO Scorecard · ${client.company_name} · ${snapshotDate}`,
       html,
       text,
     })
 
     return {
       sent: true,
-      recipient: toEmail,
+      recipient,
       messageId: result.messageId,
       kpiCount: cards.length,
     }
   } catch (error: any) {
     return {
       sent: false,
-      recipient: toEmail,
+      recipient,
       error: error?.message || String(error),
       kpiCount: 0,
     }

@@ -1,17 +1,20 @@
 import Link from 'next/link'
+import { cookies } from 'next/headers'
 import KPIScorecard from '@/components/KPIScorecard'
 import { fetchKPIScorecard } from '@/lib/scorecard'
+import { getClientFromCookies } from '@/lib/clientContext'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 export default async function ScorecardPage() {
-  // Server-side fetch so the page first paint is data-ready. Errors fall back
-  // to the client component, which retries via /api/scorecard.
+  const cookieJar = await cookies()
+  const client = await getClientFromCookies(cookieJar)
+
   let initialCards = null
   let generatedAt: string | undefined
   try {
-    initialCards = await fetchKPIScorecard()
+    initialCards = await fetchKPIScorecard(client)
     generatedAt = new Date().toISOString()
   } catch {
     initialCards = null
@@ -26,10 +29,16 @@ export default async function ScorecardPage() {
               <span className="text-lime-400">ProGrowth</span> GEO Scorecard
             </h1>
             <p className="text-gray-400 mt-1 text-sm">
-              Weekly KPI snapshot for the AI Referral Lift plan
+              Weekly KPI snapshot for <span className="text-white">{client.company_name}</span> · {client.primary_domain}
             </p>
           </div>
           <div className="flex gap-4 text-sm">
+            <Link
+              href="/clients"
+              className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
+            >
+              Clients
+            </Link>
             <Link
               href="/citation-network"
               className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"

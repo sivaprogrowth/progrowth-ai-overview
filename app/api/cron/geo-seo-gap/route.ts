@@ -1,23 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
   computeKpi5GeoSeoGap,
-  GEO_SEO_PROBE_QUERIES,
   getPromptsForMode,
   resolveRunMode,
   type RunMode,
 } from '@/lib/geoSeoGap'
 import { sendScorecardDigest } from '@/lib/scorecardDigest'
+import { getClientFromRequest } from '@/lib/clientContext'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
-/**
- * Detect whether this request was triggered by Vercel's cron scheduler vs a
- * manual curl. Vercel adds an `x-vercel-cron` header on scheduled runs. We
- * use this so manual diagnostic hits don't spam the inbox with digest mail.
- */
 function isVercelCron(req: NextRequest): boolean {
   return req.headers.get('x-vercel-cron') === '1' || req.nextUrl.searchParams.get('email') === 'true'
 }
@@ -25,48 +20,39 @@ function isVercelCron(req: NextRequest): boolean {
 /**
  * GET /api/cron/geo-seo-gap
  *
- * Runs the KPI 5 GEO/SEO Gap measurement against DataForSEO and stores the
- * result for the dashboard to read.
+ * Multi-tenant: scopes everything to the resolved client. The client comes
+ * from ?client=<slug>, the client_slug cookie, or the default ('progrowth')
+ * — see lib/clientContext.
  *
- * Auth handled by middleware (/api/cron/* accepts Bearer BATCH_API_KEY or
- * CRON_SECRET, plus session cookies). Designed to be invoked:
- *   • Manually via curl when you want a fresh measurement
- *   • By a Vercel cron schedule (configure in vercel.json) — subtask 20.6
- *   • By the dashboard's "Compute now" button if/when added
+ * Query params:
+ *   ?client=<slug>      pick which tenant to analyse
+ *   ?queries=a,b,c      custom ad-hoc set
+ *   ?mode=weekly        force 5-prompt probe
+ *   ?mode=monthly       force 25-prompt canonical run (~$10)
+ *   ?mode=auto          monthly on first Monday of month, weekly otherwise
+ *   ?email=true         force-send the digest even outside a Vercel cron call
  *
- * COST: ~$1.00 per invocation (5 queries × ~$0.20 each in DataForSEO
- * credits). Not cheap — don't wire to page-load. The existing
- * checkDailyCap() guard in lib/dataforseo.ts will refuse if the daily
- * spending cap is exceeded.
- *
- * Persistence: writes a row to the `analyses` table with a sentinel domain
- * `__kpi5_snapshot__` so the scorecard's KPI 5 fetcher can find it. Avoids
- * needing a separate kpi_snapshots table; trades schema cleanliness for
- * zero-migration deployment.
+ * COST: ~$1.00 per invocation (5 queries) or ~$10 monthly (25). The
+ * checkDailyCap() guard in lib/dataforseo.ts refuses if the daily cap
+ * is exceeded.
  */
 export async function GET(req: NextRequest) {
-  // Mode resolution:
-  //   ?queries=a,b,c        custom ad-hoc set (still tagged via mode resolution)
-  //   ?mode=weekly          force 5-prompt probe
-  //   ?mode=monthly         force 25-prompt canonical run (~$10 in API credits)
-  //   ?mode=auto (default)  monthly on first Monday of month, weekly otherwise
+  const client = await getClientFromRequest(req)
+
   const qsQueries = req.nextUrl.searchParams.get('queries')
   const modeParam = (req.nextUrl.searchParams.get('mode') as RunMode | null) ?? 'auto'
   const mode = resolveRunMode(modeParam)
   const queries = qsQueries
     ? qsQueries.split(',').map((q) => q.trim()).filter(Boolean)
-    : getPromptsForMode(mode)
+    : getPromptsForMode(mode, client)
 
-  const result = await computeKpi5GeoSeoGap(queries, mode)
+  const result = await computeKpi5GeoSeoGap(client, queries, mode)
 
-  // Persist as a sentinel analysis row so /api/scorecard can read the latest
-  // snapshot without us standing up a new table. snapshotType lets the
-  // dashboard distinguish weekly-5 (5-prompt probe) from monthly-25
-  // (full canonical run) when picking which row to render.
   const snapshotType = mode === 'monthly' ? 'monthly-25' : 'weekly-5'
   const { error } = await supabase.from('analyses').insert({
-    email: 'system@progrowth.services',
+    email: client.notification_email ?? 'system@progrowth.services',
     domain: '__kpi5_snapshot__',
+    client_id: client.id,
     keywords: queries,
     summary: {
       source: 'kpi5-geo-seo-gap',
@@ -94,16 +80,14 @@ export async function GET(req: NextRequest) {
     })),
   })
 
-  // If invoked by Vercel's scheduler (or with ?email=true for manual test),
-  // send the weekly digest email AFTER the snapshot is persisted so the
-  // digest reads the freshly-stored KPI 5 value.
   let digest = null
   if (isVercelCron(req)) {
-    digest = await sendScorecardDigest()
+    digest = await sendScorecardDigest(client)
   }
 
   return NextResponse.json({
     ...result,
+    client: { id: client.id, slug: client.slug },
     stored: !error,
     storeError: error?.message ?? null,
     digest,

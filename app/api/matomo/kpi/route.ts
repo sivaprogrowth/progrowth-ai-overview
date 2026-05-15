@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchKPIScorecard } from '@/lib/scorecard'
+import { getClientFromRequest } from '@/lib/clientContext'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -24,7 +25,8 @@ export const runtime = 'nodejs'
  *   • Future cron job at /api/cron/scorecard-snapshot
  */
 export async function GET(req: NextRequest) {
-  const cards = await fetchKPIScorecard()
+  const client = await getClientFromRequest(req)
+  const cards = await fetchKPIScorecard(client)
   // Return any KPI that has live data. Pending cards (data not yet wired)
   // are excluded so the external consumer only sees actionable rows.
   // Today this is KPIs 1, 2, 3. KPIs 4 + 5 join automatically once their

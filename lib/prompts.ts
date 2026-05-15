@@ -261,6 +261,31 @@ export const PROMPT_INDEX_BY_TEXT: Map<string, CanonicalPrompt> = new Map(
   CANONICAL_PROMPTS.map((p) => [p.text.toLowerCase(), p])
 )
 
+// ── Per-client overrides (Phase 1 multi-tenant) ───────────────────────────
+//
+// Clients can override the canonical set via `clients.prompts` / `clients.verticals`
+// in the database. When those columns are empty (e.g. the ProGrowth row before
+// migration to per-client storage, or any client that opted to use defaults)
+// we fall back to the constants defined above.
+
+interface PromptHost {
+  prompts?: CanonicalPrompt[]
+  verticals?: PromptCluster[]
+}
+
+export function getPromptsForClient(client: PromptHost): CanonicalPrompt[] {
+  return client.prompts && client.prompts.length > 0 ? client.prompts : CANONICAL_PROMPTS
+}
+
+export function getClustersForClient(client: PromptHost): PromptCluster[] {
+  return client.verticals && client.verticals.length > 0 ? client.verticals : PROMPT_CLUSTERS
+}
+
+/** Build the text→prompt index against either the client's set or the default. */
+export function buildPromptIndex(prompts: CanonicalPrompt[]): Map<string, CanonicalPrompt> {
+  return new Map(prompts.map((p) => [p.text.toLowerCase(), p]))
+}
+
 /** Sanity-check counts at compile time so accidental edits get caught. */
 const _TYPE_COUNTS = {
   comparative: getPromptsByType('comparative').length,
