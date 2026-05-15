@@ -1,20 +1,16 @@
 import Link from 'next/link'
-import KPIScorecard from '@/components/KPIScorecard'
-import { fetchKPIScorecard } from '@/lib/scorecard'
+import CitationNetworkView from '@/components/CitationNetworkView'
+import { fetchCitationNetworkSnapshot } from '@/lib/citationNetworkFetcher'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export default async function ScorecardPage() {
-  // Server-side fetch so the page first paint is data-ready. Errors fall back
-  // to the client component, which retries via /api/scorecard.
-  let initialCards = null
-  let generatedAt: string | undefined
+export default async function CitationNetworkPage() {
+  let snapshot = null
   try {
-    initialCards = await fetchKPIScorecard()
-    generatedAt = new Date().toISOString()
+    snapshot = await fetchCitationNetworkSnapshot()
   } catch {
-    initialCards = null
+    snapshot = null
   }
 
   return (
@@ -23,18 +19,19 @@ export default async function ScorecardPage() {
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold">
-              <span className="text-lime-400">ProGrowth</span> GEO Scorecard
+              <span className="text-lime-400">Citation</span> Network
             </h1>
             <p className="text-gray-400 mt-1 text-sm">
-              Weekly KPI snapshot for the AI Referral Lift plan
+              Per-engine cited domains across the canonical 25 prompts. Drives
+              earned-media outreach (Task 18) and YouTube placement (Task 23).
             </p>
           </div>
           <div className="flex gap-4 text-sm">
             <Link
-              href="/citation-network"
+              href="/scorecard"
               className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
             >
-              Citation Network
+              GEO Scorecard
             </Link>
             <Link
               href="/"
@@ -45,7 +42,7 @@ export default async function ScorecardPage() {
           </div>
         </div>
 
-        <KPIScorecard initialCards={initialCards ?? undefined} generatedAt={generatedAt} />
+        <CitationNetworkView snapshot={snapshot} />
       </div>
     </div>
   )

@@ -9,6 +9,7 @@ import ResultsTable from '@/components/ResultsTable'
 import DownloadButton from '@/components/DownloadButton'
 import DeepDiveView from '@/components/DeepDiveView'
 import AnalysisHistory from '@/components/AnalysisHistory'
+import CrawlAnalysisView from '@/components/CrawlAnalysisView'
 import { MentionRow, DeepDiveResult } from '@/lib/transform'
 import { generateCSV, generateBulkCsv } from '@/lib/csv'
 
@@ -76,6 +77,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'all' | 'gaps'>('all')
   const [deepDiveResult, setDeepDiveResult] = useState<DeepDiveResult | null>(null)
   const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null)
+  const [matomoMode, setMatomoMode] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
@@ -254,22 +256,66 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold">
-            <span className="text-lime-400">ProGrowth</span> AI Overview
-          </h1>
-          <p className="text-gray-400 mt-1">
-            Analyze your website&apos;s visibility across AI chatbots
-          </p>
+        <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold">
+              <span className="text-lime-400">ProGrowth</span> AI Overview
+            </h1>
+            <p className="text-gray-400 mt-1">
+              Analyze your website&apos;s visibility across AI chatbots
+            </p>
+          </div>
+          <div className="flex gap-4 text-sm">
+            <a
+              href="/scorecard"
+              className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
+            >
+              GEO Scorecard
+            </a>
+            <a
+              href="/citation-network"
+              className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
+            >
+              Citation Network
+            </a>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-[350px_1fr] gap-8">
           <div className="space-y-6">
             <AnalysisForm
-              onSubmit={handleSubmit}
-              onBulkCsvSubmit={handleBulkCsvSubmit}
+              onSubmit={(dom, kws, mode) => {
+                setMatomoMode(false)
+                handleSubmit(dom, kws, mode)
+              }}
+              onBulkCsvSubmit={(dom, kws, rows, headers) => {
+                setMatomoMode(false)
+                handleBulkCsvSubmit(dom, kws, rows, headers)
+              }}
+              onMatomoMode={() => {
+                setMatomoMode(true)
+                setRows([])
+                setSummary(null)
+                setCsvData(null)
+                setError(null)
+                setDeepDiveResult(null)
+                setEvents([])
+              }}
               isRunning={isRunning}
             />
+
+            {matomoMode && (
+              <CrawlAnalysisView
+                onAnalysisComplete={(newRows, newSummary) => {
+                  setRows(newRows)
+                  setSummary(newSummary)
+                  setCsvData(generateCSV(newRows))
+                  setDomain(newSummary.domain)
+                }}
+                isRunning={isRunning}
+                setIsRunning={setIsRunning}
+              />
+            )}
 
             <AnalysisHistory
               onLoadAnalysis={loadPastAnalysis}
