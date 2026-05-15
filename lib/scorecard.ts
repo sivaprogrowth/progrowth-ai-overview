@@ -244,6 +244,41 @@ async function fetchKPI5FromSupabase(): Promise<{
 }
 
 /**
+ * KPI 4 — Sentiment Score. Reads the latest snapshot written by the
+ * /api/cron/sentiment endpoint (sentinel domain `__sentiment_snapshot__`).
+ * Returns null if no snapshot has been classified yet.
+ */
+async function fetchKPI4FromSentimentSnapshot(): Promise<{
+  meanScore: number
+  totalMentions: number
+  byType: { recommended: number; mentioned: number; 'source-only': number; negative: number }
+  generatedAt: string
+} | null> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return null
+  }
+  const { supabase } = await import('@/lib/supabase')
+
+  const { data, error } = await supabase
+    .from('analyses')
+    .select('summary, created_at')
+    .eq('domain', '__sentiment_snapshot__')
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const s: any = data[0].summary
+  if (typeof s?.meanScore !== 'number') return null
+
+  return {
+    meanScore: s.meanScore,
+    totalMentions: s.totalMentions ?? 0,
+    byType: s.byType ?? { recommended: 0, mentioned: 0, 'source-only': 0, negative: 0 },
+    generatedAt: data[0].created_at,
+  }
+}
+
+/**
  * KPI 3 — Citation Share %.
  *
  * Two data sources, in priority order:
@@ -525,20 +560,39 @@ export async function fetchKPIScorecard(): Promise<KPICard[]> {
     })
   }
 
-  // KPI 4 — Sentiment-Weighted Citation Score (Task 19 dependency)
+  // KPI 4 — Sentiment-Weighted Citation Score (Task 19).
+  // Reads the latest snapshot persisted by /api/cron/sentiment. Score is
+  // the mean of per-mention scores: recommended=+1, mentioned=+0.25,
+  // source-only=0, negative=-1.
+  const kpi4 = await fetchKPI4FromSentimentSnapshot()
   cards.push({
     id: 4,
     name: 'Sentiment Score',
-    question: 'When mentioned, is it positive, neutral, or damaging?',
+    question: 'When mentioned, is it recommended, named, or just a hidden source?',
     funnelStage: 'Quality dimension',
-    current: null,
+    current: kpi4 ? kpi4.meanScore : null,
     baseline: 0,
     target30d: '>0.5',
     target90d: '>0.7',
     unit: 'avg score per mention (-1 to +1)',
-    status: 'pending',
-    source: 'aioverviews + GPT-4o-mini sentiment classifier',
-    pendingReason: 'Awaiting Task 19 — sentiment classification shipped to aioverviews',
+    perEngine: kpi4
+      ? [
+          { engine: `Recommended (${kpi4.byType.recommended})`, visits: kpi4.byType.recommended },
+          { engine: `Mentioned (${kpi4.byType.mentioned})`, visits: kpi4.byType.mentioned },
+          { engine: `Source-only (${kpi4.byType['source-only']})`, visits: kpi4.byType['source-only'] },
+          { engine: `Negative (${kpi4.byType.negative})`, visits: kpi4.byType.negative },
+        ]
+      : undefined,
+    status: kpi4 ? computeStatus(kpi4.meanScore, 0, 0.5, false) : 'pending',
+    source: kpi4
+      ? `aioverviews sentiment classifier · ${kpi4.totalMentions} mentions · ${new Date(kpi4.generatedAt).toLocaleString()}`
+      : 'aioverviews sentiment classifier',
+    caveat: kpi4
+      ? 'Mean score weights: recommended +1, mentioned +0.25, source-only 0, negative −1.'
+      : undefined,
+    pendingReason: kpi4
+      ? undefined
+      : 'No sentiment snapshot yet. Run `curl -H "Authorization: Bearer $BATCH_API_KEY" https://aioverviews.progrowth.services/api/cron/sentiment` after a citation network snapshot exists (~$0.10/mention).',
     warningThreshold: 'Any negative mention triggers immediate manual review',
   })
 

@@ -2,8 +2,31 @@
 
 import { useState } from 'react'
 import { ALL_ENGINES, type Engine } from '@/lib/citationNetwork'
-import type { CitationNetworkSnapshot } from '@/lib/citationNetworkFetcher'
+import type { CitationNetworkSnapshot, MentionType } from '@/lib/citationNetworkFetcher'
 import { PROMPT_CLUSTERS } from '@/lib/prompts'
+
+const SENTIMENT_STYLE: Record<MentionType, { label: string; chip: string; description: string }> = {
+  recommended: {
+    label: 'Recommended',
+    chip: 'bg-lime-500/20 text-lime-300 border-lime-500/40',
+    description: 'Engine names ProGrowth as one of the answers',
+  },
+  mentioned: {
+    label: 'Mentioned',
+    chip: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+    description: 'Name appears in the body but not as a primary recommendation',
+  },
+  'source-only': {
+    label: 'Source-only',
+    chip: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+    description: 'Cited as a research source but NOT named in the visible answer — hidden value',
+  },
+  negative: {
+    label: 'Negative',
+    chip: 'bg-red-500/20 text-red-300 border-red-500/40',
+    description: 'Mentioned with explicit unfavourable framing — requires manual review',
+  },
+}
 
 interface Props {
   snapshot: CitationNetworkSnapshot | null
@@ -77,28 +100,67 @@ export default function CitationNetworkView({ snapshot }: Props) {
 
       {snapshot.progrowthAppearances.length > 0 && (
         <section>
-          <h2 className='text-lg font-semibold text-white mb-3'>
-            Where ProGrowth gets cited
-          </h2>
-          <div className='rounded-lg border border-lime-500/40 bg-lime-500/5'>
+          <div className='flex items-end justify-between mb-3 flex-wrap gap-2'>
+            <h2 className='text-lg font-semibold text-white'>
+              Where ProGrowth gets cited
+            </h2>
+            {snapshot.sentimentClassifiedAt ? (
+              <span className='text-xs text-gray-500'>
+                Sentiment classified {formatDate(snapshot.sentimentClassifiedAt)}
+              </span>
+            ) : (
+              <span className='text-xs text-amber-400/80'>
+                No sentiment classifications yet — run /api/cron/sentiment
+              </span>
+            )}
+          </div>
+          <div className='rounded-lg border border-lime-500/40 bg-lime-500/5 overflow-hidden'>
             <table className='w-full text-sm'>
               <thead className='text-left text-gray-400'>
                 <tr className='border-b border-gray-800'>
                   <th className='px-4 py-2 font-medium'>Cluster</th>
                   <th className='px-4 py-2 font-medium'>Engine</th>
+                  <th className='px-4 py-2 font-medium'>Sentiment</th>
                   <th className='px-4 py-2 font-medium'>Prompt</th>
                 </tr>
               </thead>
               <tbody>
                 {snapshot.progrowthAppearances.map((app, i) => (
-                  <tr key={i} className='border-b border-gray-800/40 last:border-0'>
-                    <td className='px-4 py-2 text-gray-300'>{app.clusterName}</td>
-                    <td className='px-4 py-2'>
+                  <tr key={i} className='border-b border-gray-800/40 last:border-0 align-top'>
+                    <td className='px-4 py-3 text-gray-300'>{app.clusterName}</td>
+                    <td className='px-4 py-3'>
                       <span className={`inline-block rounded border px-2 py-0.5 text-xs ${ENGINE_STYLE[app.engine].chip}`}>
                         {ENGINE_STYLE[app.engine].label}
                       </span>
                     </td>
-                    <td className='px-4 py-2 text-gray-300 italic'>&ldquo;{app.prompt}&rdquo;</td>
+                    <td className='px-4 py-3'>
+                      {app.sentiment ? (
+                        <div className='space-y-1'>
+                          <span
+                            className={`inline-block rounded border px-2 py-0.5 text-xs ${SENTIMENT_STYLE[app.sentiment.type].chip}`}
+                            title={SENTIMENT_STYLE[app.sentiment.type].description}
+                          >
+                            {SENTIMENT_STYLE[app.sentiment.type].label}
+                          </span>
+                          <div className='text-[11px] text-gray-500 italic max-w-xs'>
+                            {app.sentiment.reasoning}
+                          </div>
+                          {app.sentiment.snippet && (
+                            <details className='text-[11px] text-gray-400 max-w-xs'>
+                              <summary className='cursor-pointer text-gray-500 hover:text-gray-300'>
+                                Show snippet
+                              </summary>
+                              <div className='mt-1 p-2 rounded bg-gray-900/50 border border-gray-800 leading-snug'>
+                                {app.sentiment.snippet}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      ) : (
+                        <span className='text-xs text-gray-500'>—</span>
+                      )}
+                    </td>
+                    <td className='px-4 py-3 text-gray-300 italic'>&ldquo;{app.prompt}&rdquo;</td>
                   </tr>
                 ))}
               </tbody>

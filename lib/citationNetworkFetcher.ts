@@ -24,12 +24,22 @@ export interface CrossEngineTarget {
   totalHits: number
 }
 
+export type MentionType = 'recommended' | 'mentioned' | 'source-only' | 'negative'
+
 export interface ProgrowthAppearance {
   clusterId: string
   clusterName: string
   engine: Engine
   promptId: string
   prompt: string
+  /** Latest sentiment classification, if /api/cron/sentiment has run since the citation network was last snapshotted. */
+  sentiment?: {
+    type: MentionType
+    score: number
+    reasoning: string
+    snippet: string | null
+    classifiedAt: string
+  }
 }
 
 export interface CitationNetworkSnapshot {
@@ -39,6 +49,8 @@ export interface CitationNetworkSnapshot {
   perCell: Record<string /* clusterId */, Record<Engine, DomainRank[]>>
   crossEngineTargets: CrossEngineTarget[]
   progrowthAppearances: ProgrowthAppearance[]
+  /** Latest sentiment snapshot timestamp, if any (null = none ever run) */
+  sentimentClassifiedAt: string | null
 }
 
 export async function fetchCitationNetworkSnapshot(): Promise<CitationNetworkSnapshot | null> {
@@ -137,6 +149,28 @@ export async function fetchCitationNetworkSnapshot(): Promise<CitationNetworkSna
     a.domain.localeCompare(b.domain)
   )
 
+  // Merge in latest sentiment classifications, if a snapshot exists.
+  const sentimentSnapshot = await fetchLatestSentimentSnapshot()
+  let sentimentClassifiedAt: string | null = null
+  if (sentimentSnapshot) {
+    sentimentClassifiedAt = sentimentSnapshot.classifiedAt
+    const byKey = new Map(
+      sentimentSnapshot.classifications.map((c) => [`${c.cluster}|${c.engine}|${c.promptId}`, c])
+    )
+    for (const app of allAppearances) {
+      const c = byKey.get(`${app.clusterId}|${app.engine}|${app.promptId}`)
+      if (c) {
+        app.sentiment = {
+          type: c.type,
+          score: c.score,
+          reasoning: c.reasoning,
+          snippet: c.snippet ?? null,
+          classifiedAt: sentimentSnapshot.classifiedAt,
+        }
+      }
+    }
+  }
+
   return {
     generatedAt: mostRecentAt,
     promptsRun,
@@ -144,5 +178,35 @@ export async function fetchCitationNetworkSnapshot(): Promise<CitationNetworkSna
     perCell,
     crossEngineTargets,
     progrowthAppearances: allAppearances,
+    sentimentClassifiedAt,
   }
+}
+
+interface SentimentRow {
+  promptId: string
+  cluster: string
+  engine: Engine
+  type: MentionType
+  score: number
+  reasoning: string
+  snippet: string | null
+}
+
+async function fetchLatestSentimentSnapshot(): Promise<{
+  classifiedAt: string
+  classifications: SentimentRow[]
+} | null> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null
+  const { supabase } = await import('@/lib/supabase')
+
+  const { data, error } = await supabase
+    .from('analyses')
+    .select('rows, created_at')
+    .eq('domain', '__sentiment_snapshot__')
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const rows = (data[0].rows ?? []) as SentimentRow[]
+  return { classifiedAt: data[0].created_at, classifications: rows }
 }
