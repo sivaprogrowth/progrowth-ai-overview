@@ -2,6 +2,28 @@
   "functions": {
     "app/api/analyze/route.ts": {
       "maxDuration": 60
+    },
+    "app/api/analyze/batch/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/matomo/crawls/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/cron/matomo-analysis/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/cron/geo-seo-gap/route.ts": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/matomo-analysis",
+      "schedule": "0 9 * * 1"
+    },
+    {
+      "path": "/api/cron/geo-seo-gap",
+      "schedule": "0 10 * * 1"
+    }
+  ]
 }
