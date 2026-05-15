@@ -43,11 +43,15 @@ export interface KPICard {
   unit: string
   status: KPIStatus
   perEngine?: KPIPerEngineSlice[]
+  /** How to format the per-engine slice numbers in the UI */
+  perEngineUnit?: 'visits' | 'percent'
   /** Visits in the immediately preceding 30-day window (for delta %) */
   previousPeriod?: number | null
   /** Most recent 4 weekly snapshots (oldest first) for sparkline */
   weeklySeries?: KPIWeeklyPoint[]
   source: string
+  /** Plain-English caveat shown when the card data is partial or stale */
+  caveat?: string
   pendingReason?: string
   warningThreshold?: string
 }
@@ -203,6 +207,63 @@ async function matomoWeeklySeries(
     .map(({ weekLabel, visits }) => ({ weekLabel, visits }))
 }
 
+/**
+ * KPI 3 — Citation Share %. Reads the most recent ProGrowth analysis from
+ * Supabase and computes the percentage of tracked keywords where any AI
+ * engine cited the domain. Per-engine breakdown is the per-engine citation
+ * rate (e.g., ChatGPT cited 3 of 7 keywords → 43%).
+ *
+ * Current source is an ad-hoc analysis row (matomo-crawl based), so the
+ * keyword set isn't yet stable week-over-week — Task 16 fixes that by
+ * defining 25 prompts in 5 clusters and a weekly cron to log them.
+ */
+async function fetchKPI3FromSupabase(): Promise<{
+  citationShare: number
+  perEngine: KPIPerEngineSlice[]
+  analysisDate: string
+} | null> {
+  // Dynamic import so the scorecard module doesn't break in environments
+  // without Supabase env vars (e.g., local without .env.local loaded).
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return null
+  }
+  const { supabase } = await import('@/lib/supabase')
+
+  const { data, error } = await supabase
+    .from('analyses')
+    .select('summary, created_at')
+    .or('domain.eq.progrowth.services,domain.eq.www.progrowth.services')
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const s: any = data[0].summary
+  const total: number = s?.totalKeywords ?? 0
+  if (!total) return null
+
+  const engineCounts: Array<[string, number]> = [
+    ['Google AI Overview', s.googlePresent ?? 0],
+    ['ChatGPT', s.chatgptPresent ?? 0],
+    ['Perplexity', s.perplexityPresent ?? 0],
+    ['Claude', s.claudePresent ?? 0],
+  ]
+  const totalCitations = engineCounts.reduce((sum, [, c]) => sum + c, 0)
+  const citationShare = (totalCitations / (total * engineCounts.length)) * 100
+
+  const perEngine = engineCounts
+    .map(([engine, count]) => ({
+      engine,
+      visits: Math.round((count / total) * 100),
+    }))
+    .sort((a, b) => b.visits - a.visits)
+
+  return {
+    citationShare: Math.round(citationShare * 10) / 10,
+    perEngine,
+    analysisDate: data[0].created_at,
+  }
+}
+
 function computeStatus(
   current: number | null,
   baseline: number,
@@ -300,20 +361,33 @@ export async function fetchKPIScorecard(): Promise<KPICard[]> {
     pendingReason: referral.error ? `Matomo fetch failed: ${referral.error}` : undefined,
   })
 
-  // KPI 3 — Citation Share Across Tracked Prompts (Task 16 dependency)
+  // KPI 3 — Citation Share Across Tracked Prompts
+  // Wires the latest ProGrowth analysis from Supabase. Real per-engine
+  // citation rates surface immediately; the full "weekly cluster cadence"
+  // shape is gated on Task 16, called out via caveat.
+  const kpi3 = await fetchKPI3FromSupabase()
   cards.push({
     id: 3,
     name: 'Citation Share %',
     question: 'Of the prompts where we should appear, how often do we?',
     funnelStage: 'Surface — middle of funnel',
-    current: null,
+    current: kpi3 ? kpi3.citationShare : null,
     baseline: 0,
     target30d: 8,
     target90d: 25,
-    unit: '% prompts cited',
-    status: 'pending',
-    source: 'aioverviews weekly cron over 25 tracked prompts (5 clusters × 5 prompts)',
-    pendingReason: 'Awaiting Task 16 — prompt cluster framework defined + weekly cron wired',
+    unit: '% prompts cited (avg across 4 engines)',
+    status: kpi3 ? computeStatus(kpi3.citationShare, 0, 8, false) : 'pending',
+    perEngine: kpi3?.perEngine,
+    perEngineUnit: kpi3 ? 'percent' : undefined,
+    source: kpi3
+      ? `Supabase analyses (latest: ${new Date(kpi3.analysisDate).toLocaleDateString()})`
+      : 'aioverviews analyses table in Supabase',
+    caveat: kpi3
+      ? 'Keyword set varies per analysis — Task 16 fixes 25 stable prompts in 5 clusters for week-over-week comparability.'
+      : undefined,
+    pendingReason: kpi3
+      ? undefined
+      : 'No ProGrowth analyses found in Supabase yet — run one from the AI Overview tool to populate.',
     warningThreshold: 'Drop on any engine for 2 consecutive weeks',
   })
 

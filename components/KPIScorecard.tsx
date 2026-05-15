@@ -235,10 +235,17 @@ export default function KPIScorecard({ initialCards, generatedAt: initialGenerat
                         <span className="text-gray-300">{slice.engine}</span>
                         <span className="text-gray-400 tabular-nums">
                           {formatNumber(slice.visits)}
+                          {card.perEngineUnit === 'percent' ? '%' : ''}
                         </span>
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {card.caveat && (
+                <div className="rounded-md border border-amber-900/40 bg-amber-950/20 p-3 text-xs text-amber-300/80">
+                  {card.caveat}
                 </div>
               )}
 
