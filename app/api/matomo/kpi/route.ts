@@ -25,13 +25,17 @@ export const runtime = 'nodejs'
  */
 export async function GET(req: NextRequest) {
   const cards = await fetchKPIScorecard()
-  const matomoBacked = cards.filter((c) => c.id === 1 || c.id === 2)
+  // Return any KPI that has live data. Pending cards (data not yet wired)
+  // are excluded so the external consumer only sees actionable rows.
+  // Today this is KPIs 1, 2, 3. KPIs 4 + 5 join automatically once their
+  // tasks ship and the lib/scorecard.ts loaders return non-null.
+  const measurable = cards.filter((c) => c.current !== null)
 
   const format = req.nextUrl.searchParams.get('format') ?? 'nested'
 
   if (format === 'flat') {
     // Sheet-friendly key/value pairs. One row per KPI.
-    const rows = matomoBacked.map((c) => ({
+    const rows = measurable.map((c) => ({
       kpi_id: c.id,
       kpi_name: c.name,
       current: c.current,
@@ -53,6 +57,6 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
-    cards: matomoBacked,
+    cards: measurable,
   })
 }
