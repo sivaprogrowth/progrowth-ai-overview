@@ -208,6 +208,42 @@ async function matomoWeeklySeries(
 }
 
 /**
+ * KPI 5 — GEO/SEO Gap. Reads the most recent snapshot written by the
+ * /api/cron/geo-seo-gap endpoint (sentinel domain `__kpi5_snapshot__`).
+ * Returns null if no snapshot has been computed yet; the card then
+ * renders a "compute now" pendingReason instead of pretending to know.
+ */
+async function fetchKPI5FromSupabase(): Promise<{
+  gapPercent: number
+  meanOverlap: number
+  generatedAt: string
+  queriesAnalyzed: number
+} | null> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return null
+  }
+  const { supabase } = await import('@/lib/supabase')
+
+  const { data, error } = await supabase
+    .from('analyses')
+    .select('summary, created_at, keywords')
+    .eq('domain', '__kpi5_snapshot__')
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const s: any = data[0].summary
+  if (typeof s?.gapPercent !== 'number') return null
+
+  return {
+    gapPercent: s.gapPercent,
+    meanOverlap: s.meanOverlap ?? 0,
+    generatedAt: data[0].created_at,
+    queriesAnalyzed: Array.isArray(data[0].keywords) ? data[0].keywords.length : 0,
+  }
+}
+
+/**
  * KPI 3 — Citation Share %. Reads the most recent ProGrowth analysis from
  * Supabase and computes the percentage of tracked keywords where any AI
  * engine cited the domain. Per-engine breakdown is the per-engine citation
@@ -408,20 +444,30 @@ export async function fetchKPIScorecard(): Promise<KPICard[]> {
     warningThreshold: 'Any negative mention triggers immediate manual review',
   })
 
-  // KPI 5 — GEO/SEO Gap (Task 22 + DataForSEO wiring)
+  // KPI 5 — GEO/SEO Gap
+  // Reads the latest snapshot written by /api/cron/geo-seo-gap. If no
+  // snapshot exists yet, the card tells the user how to compute one.
+  const kpi5 = await fetchKPI5FromSupabase()
   cards.push({
     id: 5,
     name: 'GEO/SEO Gap',
     question: 'Is our Google rank translating to AI visibility?',
     funnelStage: 'Competitive diagnosis',
-    current: null,
+    current: kpi5 ? kpi5.gapPercent : null,
     baseline: 0,
     target30d: 'baseline measured',
     target90d: '<50%',
-    unit: '% domain overlap (AI ∩ Google top-10)',
-    status: 'pending',
-    source: 'aioverviews citations ∩ DataForSEO Google top-10 for same query',
-    pendingReason: 'Awaiting Task 22 + GEO/SEO gap query implementation',
+    unit: '% gap (lower = more SEO→GEO overlap)',
+    status: kpi5 ? 'on-track' : 'pending',
+    source: kpi5
+      ? `DataForSEO Google SERP ∩ ChatGPT mention search · ${kpi5.queriesAnalyzed} probe queries · ${new Date(kpi5.generatedAt).toLocaleString()}`
+      : 'DataForSEO Google SERP ∩ ChatGPT mention search — snapshot via /api/cron/geo-seo-gap',
+    caveat: kpi5
+      ? 'Snapshot is point-in-time — runs against 5 hardcoded probe queries today; Task 22 expands to the full prompt set.'
+      : undefined,
+    pendingReason: kpi5
+      ? undefined
+      : 'No snapshot stored yet. Run `curl -H "Authorization: Bearer $BATCH_API_KEY" https://aioverviews.progrowth.services/api/cron/geo-seo-gap` to populate (~$1 in DataForSEO credits, ~30s runtime).',
     warningThreshold: 'Gap widens for 3 consecutive weeks despite content shipping',
   })
 
