@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { computeKpi5GeoSeoGap, GEO_SEO_PROBE_QUERIES } from '@/lib/geoSeoGap'
+import { sendScorecardDigest } from '@/lib/scorecardDigest'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 export const maxDuration = 60
+
+/**
+ * Detect whether this request was triggered by Vercel's cron scheduler vs a
+ * manual curl. Vercel adds an `x-vercel-cron` header on scheduled runs. We
+ * use this so manual diagnostic hits don't spam the inbox with digest mail.
+ */
+function isVercelCron(req: NextRequest): boolean {
+  return req.headers.get('x-vercel-cron') === '1' || req.nextUrl.searchParams.get('email') === 'true'
+}
 
 /**
  * GET /api/cron/geo-seo-gap
@@ -57,9 +67,18 @@ export async function GET(req: NextRequest) {
     })),
   })
 
+  // If invoked by Vercel's scheduler (or with ?email=true for manual test),
+  // send the weekly digest email AFTER the snapshot is persisted so the
+  // digest reads the freshly-stored KPI 5 value.
+  let digest = null
+  if (isVercelCron(req)) {
+    digest = await sendScorecardDigest()
+  }
+
   return NextResponse.json({
     ...result,
     stored: !error,
     storeError: error?.message ?? null,
+    digest,
   })
 }
