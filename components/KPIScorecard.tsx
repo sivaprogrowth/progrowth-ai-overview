@@ -27,6 +27,51 @@ function progressPercent(current: number | null, baseline: number, target: numbe
   return Math.max(0, Math.min(100, Math.round(pct)))
 }
 
+function deltaPercent(current: number | null | undefined, previous: number | null | undefined): number | null {
+  if (current === null || current === undefined) return null
+  if (previous === null || previous === undefined || previous === 0) return null
+  return Math.round(((current - previous) / previous) * 100)
+}
+
+function deltaLabel(delta: number | null): { text: string; color: string } | null {
+  if (delta === null) return null
+  if (delta > 0) return { text: `+${delta}% vs prior 30d`, color: 'text-lime-400' }
+  if (delta < 0) return { text: `${delta}% vs prior 30d`, color: 'text-amber-400' }
+  return { text: 'flat vs prior 30d', color: 'text-gray-400' }
+}
+
+/**
+ * Tiny inline SVG sparkline — no chart library. Renders a 100x28 area with
+ * the series scaled to fit. A pulsing dot marks the most recent point.
+ */
+function Sparkline({ series }: { series: { weekLabel: string; visits: number }[] }) {
+  if (series.length < 2) return null
+  const w = 100
+  const h = 28
+  const padY = 2
+  const max = Math.max(...series.map((p) => p.visits), 1)
+  const min = Math.min(...series.map((p) => p.visits), 0)
+  const range = max - min || 1
+  const stepX = w / (series.length - 1)
+  const points = series
+    .map((p, i) => {
+      const x = i * stepX
+      const y = h - padY - ((p.visits - min) / range) * (h - 2 * padY)
+      return `${x},${y}`
+    })
+    .join(' ')
+  const last = series[series.length - 1]
+  const lastX = (series.length - 1) * stepX
+  const lastY = h - padY - ((last.visits - min) / range) * (h - 2 * padY)
+
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} className="overflow-visible">
+      <polyline points={points} fill="none" stroke="rgb(132 204 22)" strokeWidth="1.5" />
+      <circle cx={lastX} cy={lastY} r="2.5" fill="rgb(190 242 100)" />
+    </svg>
+  )
+}
+
 export default function KPIScorecard({ initialCards, generatedAt: initialGeneratedAt }: Props) {
   const [cards, setCards] = useState<KPICard[] | null>(initialCards ?? null)
   const [generatedAt, setGeneratedAt] = useState<string | null>(initialGeneratedAt ?? null)
@@ -118,10 +163,29 @@ export default function KPIScorecard({ initialCards, generatedAt: initialGenerat
               </div>
 
               <div>
-                <div className="text-3xl font-bold text-white tabular-nums">
-                  {formatNumber(card.current)}
+                <div className="flex items-end justify-between gap-3">
+                  <div className="text-3xl font-bold text-white tabular-nums">
+                    {formatNumber(card.current)}
+                  </div>
+                  {(() => {
+                    const delta = deltaLabel(deltaPercent(card.current, card.previousPeriod))
+                    return delta ? (
+                      <div className={`text-xs ${delta.color} mb-1 whitespace-nowrap`}>
+                        {delta.text}
+                      </div>
+                    ) : null
+                  })()}
                 </div>
                 <div className="text-xs text-gray-500">{card.unit}</div>
+                {card.weeklySeries && card.weeklySeries.length >= 2 && (
+                  <div className="mt-3">
+                    <Sparkline series={card.weeklySeries} />
+                    <div className="flex justify-between text-[10px] text-gray-500 mt-1 tabular-nums">
+                      <span>{card.weeklySeries[0].weekLabel}</span>
+                      <span>{card.weeklySeries[card.weeklySeries.length - 1].weekLabel}</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-3 gap-3 text-xs">
