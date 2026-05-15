@@ -244,14 +244,72 @@ async function fetchKPI5FromSupabase(): Promise<{
 }
 
 /**
+ * KPI 3 — Citation Share %.
+ *
+ * Two data sources, in priority order:
+ *   1. Latest monthly-25 KPI 5 snapshot (canonical 25 prompts, 5 clusters)
+ *      — preferred because the prompt set is stable week-over-week and
+ *      carries per-cluster aggregates needed for the dashboard breakdown.
+ *   2. Latest matomo-crawl analysis (fallback when no monthly run yet)
+ *      — keyword set varies per run, so directional signal only.
+ *
+ * Per-engine slice shows each engine's citation rate independently when
+ * source #2 is used; for source #1 we instead surface per-cluster slices
+ * via the byCluster field.
+ */
+async function fetchKPI3FromCanonicalSnapshot(): Promise<{
+  citationShare: number // 0..100
+  byCluster: Record<string, { name: string; citationShare: number; cited: number; total: number }>
+  generatedAt: string
+  promptCount: number
+} | null> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return null
+  }
+  const { supabase } = await import('@/lib/supabase')
+
+  // monthly-25 only; weekly-5 has too small a denominator for KPI 3
+  const { data, error } = await supabase
+    .from('analyses')
+    .select('summary, created_at, keywords')
+    .eq('domain', '__kpi5_snapshot__')
+    .eq('summary->>snapshotType', 'monthly-25')
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const s: any = data[0].summary
+  if (typeof s?.brandCitationShare !== 'number' || !s?.byCluster) return null
+
+  // Lazy-import cluster names so we don't bloat module load.
+  const { PROMPT_CLUSTERS } = await import('@/lib/prompts')
+  const clusterNameById = new Map(PROMPT_CLUSTERS.map((c) => [c.id, c.name]))
+
+  const byCluster: Record<string, { name: string; citationShare: number; cited: number; total: number }> = {}
+  for (const [id, agg] of Object.entries(s.byCluster as Record<string, any>)) {
+    byCluster[id] = {
+      name: clusterNameById.get(id) ?? id,
+      citationShare: Math.round((agg.citationShare ?? 0) * 1000) / 10, // → percent
+      cited: agg.citedCount ?? 0,
+      total: agg.promptCount ?? 0,
+    }
+  }
+
+  return {
+    citationShare: Math.round(s.brandCitationShare * 1000) / 10, // → percent
+    byCluster,
+    generatedAt: data[0].created_at,
+    promptCount: s.totalKeywords ?? Array.isArray(data[0].keywords) ? data[0].keywords.length : 0,
+  }
+}
+
+/**
  * KPI 3 — Citation Share %. Reads the most recent ProGrowth analysis from
  * Supabase and computes the percentage of tracked keywords where any AI
  * engine cited the domain. Per-engine breakdown is the per-engine citation
  * rate (e.g., ChatGPT cited 3 of 7 keywords → 43%).
  *
- * Current source is an ad-hoc analysis row (matomo-crawl based), so the
- * keyword set isn't yet stable week-over-week — Task 16 fixes that by
- * defining 25 prompts in 5 clusters and a weekly cron to log them.
+ * Used as a fallback when no monthly-25 canonical snapshot exists yet.
  */
 async function fetchKPI3FromSupabase(): Promise<{
   citationShare: number
@@ -398,34 +456,74 @@ export async function fetchKPIScorecard(): Promise<KPICard[]> {
   })
 
   // KPI 3 — Citation Share Across Tracked Prompts
-  // Wires the latest ProGrowth analysis from Supabase. Real per-engine
-  // citation rates surface immediately; the full "weekly cluster cadence"
-  // shape is gated on Task 16, called out via caveat.
-  const kpi3 = await fetchKPI3FromSupabase()
-  cards.push({
-    id: 3,
-    name: 'Citation Share %',
-    question: 'Of the prompts where we should appear, how often do we?',
-    funnelStage: 'Surface — middle of funnel',
-    current: kpi3 ? kpi3.citationShare : null,
-    baseline: 0,
-    target30d: 8,
-    target90d: 25,
-    unit: '% prompts cited (avg across 4 engines)',
-    status: kpi3 ? computeStatus(kpi3.citationShare, 0, 8, false) : 'pending',
-    perEngine: kpi3?.perEngine,
-    perEngineUnit: kpi3 ? 'percent' : undefined,
-    source: kpi3
-      ? `Supabase analyses (latest: ${new Date(kpi3.analysisDate).toLocaleDateString()})`
-      : 'aioverviews analyses table in Supabase',
-    caveat: kpi3
-      ? 'Keyword set varies per analysis — Task 16 fixes 25 stable prompts in 5 clusters for week-over-week comparability.'
-      : undefined,
-    pendingReason: kpi3
-      ? undefined
-      : 'No ProGrowth analyses found in Supabase yet — run one from the AI Overview tool to populate.',
-    warningThreshold: 'Drop on any engine for 2 consecutive weeks',
-  })
+  // Prefer the canonical monthly-25 snapshot (stable, cluster-tagged).
+  // Fall back to the latest matomo-crawl analysis when no monthly run yet.
+  const kpi3Canonical = await fetchKPI3FromCanonicalSnapshot()
+  const kpi3Fallback = kpi3Canonical ? null : await fetchKPI3FromSupabase()
+
+  if (kpi3Canonical) {
+    // Convert byCluster to perEngine-shaped slices so the dashboard
+    // component renders them uniformly. Each "engine" here is actually
+    // a cluster — labels make this clear.
+    const clusterSlices = Object.values(kpi3Canonical.byCluster).map((c) => ({
+      engine: `${c.name} (${c.cited}/${c.total})`,
+      visits: c.citationShare,
+    }))
+    cards.push({
+      id: 3,
+      name: 'Citation Share %',
+      question: 'Of the 25 canonical prompts, how many cite ProGrowth?',
+      funnelStage: 'Surface — middle of funnel',
+      current: kpi3Canonical.citationShare,
+      baseline: 0,
+      target30d: 8,
+      target90d: 25,
+      unit: '% of 25 canonical prompts citing progrowth.services',
+      status: computeStatus(kpi3Canonical.citationShare, 0, 8, false),
+      perEngine: clusterSlices,
+      perEngineUnit: 'percent',
+      source: `Canonical 25-prompt monthly snapshot · ${new Date(kpi3Canonical.generatedAt).toLocaleDateString()}`,
+      caveat:
+        'Cluster slices show citation share per topical area. Monthly cadence — weekly 5-prompt probes update KPI 5 but do not refresh KPI 3.',
+      warningThreshold: 'Drop on any cluster for 2 consecutive months',
+    })
+  } else if (kpi3Fallback) {
+    cards.push({
+      id: 3,
+      name: 'Citation Share %',
+      question: 'Of the prompts where we should appear, how often do we?',
+      funnelStage: 'Surface — middle of funnel',
+      current: kpi3Fallback.citationShare,
+      baseline: 0,
+      target30d: 8,
+      target90d: 25,
+      unit: '% prompts cited (avg across 4 engines)',
+      status: computeStatus(kpi3Fallback.citationShare, 0, 8, false),
+      perEngine: kpi3Fallback.perEngine,
+      perEngineUnit: 'percent',
+      source: `Latest ad-hoc analysis · ${new Date(kpi3Fallback.analysisDate).toLocaleDateString()}`,
+      caveat:
+        'Fallback source — keyword set varies per analysis. Run a monthly canonical snapshot for stable measurement (curl …/api/cron/geo-seo-gap?mode=monthly).',
+      warningThreshold: 'Drop on any engine for 2 consecutive weeks',
+    })
+  } else {
+    cards.push({
+      id: 3,
+      name: 'Citation Share %',
+      question: 'Of the 25 canonical prompts, how many cite ProGrowth?',
+      funnelStage: 'Surface — middle of funnel',
+      current: null,
+      baseline: 0,
+      target30d: 8,
+      target90d: 25,
+      unit: '% of 25 canonical prompts citing progrowth.services',
+      status: 'pending',
+      source: 'Canonical 25-prompt monthly snapshot',
+      pendingReason:
+        'No canonical snapshot yet. Run `curl -H "Authorization: Bearer $CRON_SECRET" https://aioverviews.progrowth.services/api/cron/geo-seo-gap?mode=monthly` to take the first one (~$10, ~60s).',
+      warningThreshold: 'Drop on any cluster for 2 consecutive months',
+    })
+  }
 
   // KPI 4 — Sentiment-Weighted Citation Score (Task 19 dependency)
   cards.push({

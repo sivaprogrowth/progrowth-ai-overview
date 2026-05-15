@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { computeKpi5GeoSeoGap, GEO_SEO_PROBE_QUERIES } from '@/lib/geoSeoGap'
+import {
+  computeKpi5GeoSeoGap,
+  GEO_SEO_PROBE_QUERIES,
+  getPromptsForMode,
+  resolveRunMode,
+  type RunMode,
+} from '@/lib/geoSeoGap'
 import { sendScorecardDigest } from '@/lib/scorecardDigest'
 import { supabase } from '@/lib/supabase'
 
@@ -39,26 +45,47 @@ function isVercelCron(req: NextRequest): boolean {
  * zero-migration deployment.
  */
 export async function GET(req: NextRequest) {
+  // Mode resolution:
+  //   ?queries=a,b,c        custom ad-hoc set (still tagged via mode resolution)
+  //   ?mode=weekly          force 5-prompt probe
+  //   ?mode=monthly         force 25-prompt canonical run (~$10 in API credits)
+  //   ?mode=auto (default)  monthly on first Monday of month, weekly otherwise
   const qsQueries = req.nextUrl.searchParams.get('queries')
-  const queries = qsQueries ? qsQueries.split(',').map((q) => q.trim()).filter(Boolean) : GEO_SEO_PROBE_QUERIES
+  const modeParam = (req.nextUrl.searchParams.get('mode') as RunMode | null) ?? 'auto'
+  const mode = resolveRunMode(modeParam)
+  const queries = qsQueries
+    ? qsQueries.split(',').map((q) => q.trim()).filter(Boolean)
+    : getPromptsForMode(mode)
 
-  const result = await computeKpi5GeoSeoGap(queries)
+  const result = await computeKpi5GeoSeoGap(queries, mode)
 
   // Persist as a sentinel analysis row so /api/scorecard can read the latest
-  // snapshot without us standing up a new table.
+  // snapshot without us standing up a new table. snapshotType lets the
+  // dashboard distinguish weekly-5 (5-prompt probe) from monthly-25
+  // (full canonical run) when picking which row to render.
+  const snapshotType = mode === 'monthly' ? 'monthly-25' : 'weekly-5'
   const { error } = await supabase.from('analyses').insert({
     email: 'system@progrowth.services',
     domain: '__kpi5_snapshot__',
     keywords: queries,
     summary: {
       source: 'kpi5-geo-seo-gap',
+      snapshotType,
+      mode,
       gapPercent: result.gapPercent,
       meanOverlap: result.meanOverlap,
+      brandCitationShare: result.brandCitationShare,
+      byCluster: result.byCluster,
       totalKeywords: queries.length,
     },
     rows: result.queries.map((q) => ({
       keyword: q.query,
+      promptId: q.promptId,
+      cluster: q.cluster,
+      promptType: q.promptType,
       overlap: q.overlap,
+      brandCitedByChatgpt: q.brandCitedByChatgpt,
+      brandRankedByGoogle: q.brandRankedByGoogle,
       chatgptDomainCount: q.chatgptDomains.length,
       googleDomainCount: q.googleDomains.length,
       sharedDomains: q.chatgptDomains.filter((d) =>
