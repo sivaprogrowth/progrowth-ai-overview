@@ -9,7 +9,6 @@ import ResultsTable from '@/components/ResultsTable'
 import DownloadButton from '@/components/DownloadButton'
 import DeepDiveView from '@/components/DeepDiveView'
 import AnalysisHistory from '@/components/AnalysisHistory'
-import CrawlAnalysisView from '@/components/CrawlAnalysisView'
 import { MentionRow, DeepDiveResult } from '@/lib/transform'
 import { generateCSV, generateBulkCsv } from '@/lib/csv'
 
@@ -77,7 +76,6 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'all' | 'gaps'>('all')
   const [deepDiveResult, setDeepDiveResult] = useState<DeepDiveResult | null>(null)
   const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null)
-  const [matomoMode, setMatomoMode] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
@@ -284,38 +282,10 @@ export default function Home() {
         <div className="grid grid-cols-1 lg:grid-cols-[350px_1fr] gap-8">
           <div className="space-y-6">
             <AnalysisForm
-              onSubmit={(dom, kws, mode) => {
-                setMatomoMode(false)
-                handleSubmit(dom, kws, mode)
-              }}
-              onBulkCsvSubmit={(dom, kws, rows, headers) => {
-                setMatomoMode(false)
-                handleBulkCsvSubmit(dom, kws, rows, headers)
-              }}
-              onMatomoMode={() => {
-                setMatomoMode(true)
-                setRows([])
-                setSummary(null)
-                setCsvData(null)
-                setError(null)
-                setDeepDiveResult(null)
-                setEvents([])
-              }}
+              onSubmit={handleSubmit}
+              onBulkCsvSubmit={handleBulkCsvSubmit}
               isRunning={isRunning}
             />
-
-            {matomoMode && (
-              <CrawlAnalysisView
-                onAnalysisComplete={(newRows, newSummary) => {
-                  setRows(newRows)
-                  setSummary(newSummary)
-                  setCsvData(generateCSV(newRows))
-                  setDomain(newSummary.domain)
-                }}
-                isRunning={isRunning}
-                setIsRunning={setIsRunning}
-              />
-            )}
 
             <AnalysisHistory
               onLoadAnalysis={loadPastAnalysis}
