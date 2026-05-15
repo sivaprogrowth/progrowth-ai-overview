@@ -34,6 +34,24 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next()
   }
 
+  // Allow batch/matomo/cron routes with Bearer token
+  if (
+    pathname.startsWith('/api/analyze/batch') ||
+    pathname.startsWith('/api/matomo/') ||
+    pathname.startsWith('/api/cron/')
+  ) {
+    const authHeader = req.headers.get('authorization')
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.slice(7)
+      if (
+        token === process.env.BATCH_API_KEY ||
+        token === process.env.CRON_SECRET
+      ) {
+        return NextResponse.next()
+      }
+    }
+  }
+
   // Check session cookie
   const session = req.cookies.get('session')?.value
   if (session && await verifyToken(session)) {
