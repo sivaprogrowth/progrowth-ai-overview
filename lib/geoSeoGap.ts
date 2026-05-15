@@ -18,7 +18,11 @@
  * wires to a weekly cron (subtask 20.6).
  */
 
-import { fetchMentionSearch } from './dataforseo'
+// Note: we deliberately don't use lib/dataforseo's fetchMentionSearch here.
+// The llm_mentions/search endpoint requires a subscription tier that isn't
+// active on this account ("Access denied. Visit Plans and Subscriptions").
+// The chat_gpt/llm_responses endpoint works on the current plan and returns
+// the actual ChatGPT answer with citation annotations.
 
 /**
  * Seed prompt set for the gap measurement. Picked to span ProGrowth's
@@ -106,21 +110,48 @@ export async function fetchGoogleTop10Domains(keyword: string): Promise<string[]
 }
 
 /**
- * Domains that ChatGPT cites in its answer to `keyword`. Reuses the
- * existing fetchMentionSearch helper which queries the LLM Mentions API
- * for the chat_gpt platform.
+ * Domains that ChatGPT cites when answering a question about `keyword`.
+ * Uses DataForSEO's chat_gpt/llm_responses/live endpoint which returns
+ * the actual ChatGPT answer with a citations annotations array.
+ *
+ * Phrases the keyword as a recommendation-seeking question to maximize
+ * the chance ChatGPT cites multiple sources rather than answering from
+ * pretrained knowledge alone.
  */
 export async function fetchChatgptCitedDomains(keyword: string): Promise<string[]> {
-  const target = [{ keyword, match_type: 'partial_match' as const, search_scope: ['any' as const] }]
-  const res = (await fetchMentionSearch(target, 'chat_gpt', 100).catch(() => null)) as any
-  if (!res?.tasks) return []
+  const prompt = `What are the best services for "${keyword}"? List the top 5 companies with their websites and a brief reason for each.`
+  const res = await fetch(`${DATAFORSEO_BASE}/ai_optimization/chat_gpt/llm_responses/live`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${getAuth()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify([
+      {
+        user_prompt: prompt,
+        model_name: 'gpt-4o-mini',
+        web_search: true,
+      },
+    ]),
+  })
+  if (!res.ok) return []
+  const data = (await res.json()) as any
+
+  const items = data?.tasks?.[0]?.result?.[0]?.items ?? []
   const domains = new Set<string>()
-  for (const task of res.tasks) {
-    for (const result of task?.result ?? []) {
-      for (const item of result?.items ?? []) {
-        const d = extractDomain(item.url || item.domain)
+  for (const item of items) {
+    // Citations live in item.sections[*].annotations[*].url for type=message
+    // (and rarely at item.annotations directly for simpler responses).
+    const sections = item?.sections ?? []
+    for (const section of sections) {
+      for (const ann of section?.annotations ?? []) {
+        const d = extractDomain(ann.url)
         if (d) domains.add(d)
       }
+    }
+    for (const ann of item?.annotations ?? []) {
+      const d = extractDomain(ann.url)
+      if (d) domains.add(d)
     }
   }
   return Array.from(domains)
