@@ -83,7 +83,24 @@ const STATUS_STYLE: Record<KPICard['status'], { dot: string; label: string; text
 function formatNumber(value: number | string | null | undefined): string {
   if (value === null || value === undefined) return '—'
   if (typeof value === 'string') return value
-  return value.toLocaleString()
+  // Pin locale so SSR and hydration produce the same grouping separators
+  // (otherwise a server/browser locale difference is a hydration mismatch).
+  return value.toLocaleString('en-US')
+}
+
+/** Fixed-timeZone date format — server SSR and browser hydration must
+ *  produce the identical string (see CitationNetworkView for the same
+ *  pattern / rationale). */
+function formatRefreshed(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  })
 }
 
 function progressPercent(current: number | null, baseline: number, target: number | string): number | null {
@@ -212,7 +229,7 @@ export default function KPIScorecard({
 
       {generatedAt && (
         <p className="text-xs text-gray-500">
-          Last refreshed {new Date(generatedAt).toLocaleString()}
+          Last refreshed {formatRefreshed(generatedAt)}
         </p>
       )}
 
