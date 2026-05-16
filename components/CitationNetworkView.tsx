@@ -58,12 +58,18 @@ function tierLabel(count: number): { label: string; color: string } {
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'No snapshot'
+  // Pin the timeZone so SSR (server TZ) and hydration (browser TZ) produce
+  // the SAME string — otherwise React throws hydration mismatch errors
+  // (#418/#423/#425). timeZoneName makes the fixed zone explicit so the
+  // displayed time isn't mistaken for the viewer's local time.
   return new Date(iso).toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
   })
 }
 
