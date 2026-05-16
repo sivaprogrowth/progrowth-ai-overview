@@ -32,7 +32,7 @@ export interface KPIWeeklyPoint {
 }
 
 export interface KPICard {
-  id: 1 | 2 | 3 | 4 | 5
+  id: 1 | 2 | 3 | 4 | 5 | 6
   name: string
   question: string
   funnelStage: string
@@ -359,6 +359,79 @@ async function fetchKPI3FromSupabase(client: Client): Promise<{
   }
 }
 
+/**
+ * KPI 6 — AI-Readiness. Reads the latest `__ai_readiness_snapshot__` written
+ * by /api/cron/ai-readiness (Task 26.4). This is a hard Search-eligibility
+ * gate, NOT a tunable metric: per Google's docs, AI Overviews / AI Mode
+ * eligibility == standard Search snippet eligibility. Page experience and
+ * Google-Extended are surfaced as informational context, never as the gate.
+ */
+export interface AiReadinessSnapshot {
+  searchEligible: boolean
+  pagesAudited: number
+  pagesEligible: number
+  blockedCriticalBots: string[]
+  googleExtendedBlocked: boolean
+  robotsTxtFound: boolean
+  capReached: boolean
+  pageExperience: {
+    avgLcpMs: number | null
+    avgCls: number | null
+    avgTbtMs: number | null
+    avgPerformanceScore: number | null
+    allCoreWebVitalsPass: boolean
+  } | null
+  topFailures: string[]
+  generatedAt: string
+}
+
+export async function fetchAiReadinessFromSnapshot(
+  client: Client
+): Promise<AiReadinessSnapshot | null> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return null
+  }
+  const { supabase } = await import('@/lib/supabase')
+
+  const { data, error } = await supabase
+    .from('analyses')
+    .select('summary, rows, created_at')
+    .eq('client_id', client.id)
+    .eq('domain', '__ai_readiness_snapshot__')
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const s: any = data[0].summary
+  if (typeof s?.searchEligible !== 'boolean') return null
+
+  const rows: any[] = Array.isArray(data[0].rows) ? data[0].rows : []
+  const pagesEligible = rows.filter((r) => r?.searchEligible === true).length
+  const robots = s.robots ?? {}
+  const pe = s.pageExperience ?? null
+
+  return {
+    searchEligible: s.searchEligible,
+    pagesAudited: s.pagesAudited ?? rows.length,
+    pagesEligible,
+    blockedCriticalBots: Array.isArray(robots.blockedCriticalBots) ? robots.blockedCriticalBots : [],
+    googleExtendedBlocked: !!robots.googleExtendedBlocked,
+    robotsTxtFound: !!robots.robotsTxtFound,
+    capReached: !!s.capReached,
+    pageExperience: pe
+      ? {
+          avgLcpMs: pe.avgLcpMs ?? null,
+          avgCls: pe.avgCls ?? null,
+          avgTbtMs: pe.avgTbtMs ?? null,
+          avgPerformanceScore: pe.avgPerformanceScore ?? null,
+          allCoreWebVitalsPass: !!pe.allCoreWebVitalsPass,
+        }
+      : null,
+    topFailures: Array.isArray(s.failures) ? s.failures.slice(0, 5) : [],
+    generatedAt: data[0].created_at,
+  }
+}
+
 function computeStatus(
   current: number | null,
   baseline: number,
@@ -643,6 +716,84 @@ export async function fetchKPIScorecard(client: Client): Promise<KPICard[]> {
       : `No snapshot stored yet. Run \`curl -H "Authorization: Bearer $BATCH_API_KEY" https://aioverviews.progrowth.services/api/cron/geo-seo-gap?client=${client.slug}\` to populate (~$1 in DataForSEO credits, ~30s runtime).`,
     warningThreshold: 'Gap widens for 3 consecutive weeks despite content shipping',
   })
+
+  // ── KPI 6 — AI-Readiness (hard Search-eligibility gate) ───────────────
+  const kpi6 = await fetchAiReadinessFromSnapshot(client)
+  if (kpi6) {
+    const eligiblePct =
+      kpi6.pagesAudited > 0
+        ? Math.round((kpi6.pagesEligible / kpi6.pagesAudited) * 100)
+        : 0
+    // Hard gate: a single ineligible page or a blocked critical bot fails it.
+    // Page experience never gates (it's a ranking signal) — it only lifts a
+    // passing card from on-track to ahead.
+    const status: KPIStatus = !kpi6.searchEligible
+      ? 'behind'
+      : kpi6.pageExperience?.allCoreWebVitalsPass
+        ? 'ahead'
+        : 'on-track'
+
+    const pe = kpi6.pageExperience
+    const perEngine: KPIPerEngineSlice[] = [
+      { engine: `Pages AI-eligible (${kpi6.pagesEligible}/${kpi6.pagesAudited})`, visits: eligiblePct },
+      { engine: `Critical answer-engine bots blocked`, visits: kpi6.blockedCriticalBots.length },
+    ]
+    if (pe) {
+      if (pe.avgLcpMs !== null) perEngine.push({ engine: `Avg LCP ms (good ≤2500)`, visits: Math.round(pe.avgLcpMs) })
+      if (pe.avgCls !== null) perEngine.push({ engine: `Avg CLS ×100 (good ≤10)`, visits: Math.round(pe.avgCls * 100) })
+      if (pe.avgTbtMs !== null) perEngine.push({ engine: `Avg TBT ms (good ≤200)`, visits: Math.round(pe.avgTbtMs) })
+      if (pe.avgPerformanceScore !== null) perEngine.push({ engine: `Avg Lighthouse perf`, visits: Math.round(pe.avgPerformanceScore) })
+    }
+
+    const caveatParts: string[] = []
+    if (kpi6.googleExtendedBlocked) {
+      caveatParts.push(
+        'robots.txt blocks Google-Extended — INFORMATIONAL ONLY: this affects Gemini app / Vertex grounding & training, NOT Google Search, AI Overviews, or AI Mode. It does not fail this gate.'
+      )
+    }
+    caveatParts.push(
+      'Hard gate = HTTP 2xx + no noindex/snippet-suppression + no critical answer-engine bot blocked. Core Web Vitals are a ranking signal (shown as CLS×100 for integer display), not an eligibility gate.'
+    )
+    if (kpi6.capReached) {
+      caveatParts.push('Snapshot is PARTIAL — the DataForSEO daily cap was hit mid-run; some pages were not audited.')
+    }
+    if (kpi6.topFailures.length > 0) {
+      caveatParts.push(`Top blockers: ${kpi6.topFailures.join(' | ')}`)
+    }
+
+    cards.push({
+      id: 6,
+      name: 'AI-Readiness',
+      question: `Is ${client.company_name}'s content technically eligible to appear in AI answers?`,
+      funnelStage: 'Eligibility — foundation',
+      current: eligiblePct,
+      baseline: 0,
+      target30d: 100,
+      target90d: 100,
+      unit: '% of audited pages AI-search-eligible',
+      status,
+      perEngine,
+      source: `aioverviews AI-readiness audit · ${kpi6.pagesAudited} pages · ${new Date(kpi6.generatedAt).toLocaleString()}`,
+      caveat: caveatParts.join(' '),
+      warningThreshold: 'Any page drops out of Search eligibility, or a critical answer-engine bot becomes blocked',
+    })
+  } else {
+    cards.push({
+      id: 6,
+      name: 'AI-Readiness',
+      question: `Is ${client.company_name}'s content technically eligible to appear in AI answers?`,
+      funnelStage: 'Eligibility — foundation',
+      current: null,
+      baseline: 0,
+      target30d: 100,
+      target90d: 100,
+      unit: '% of audited pages AI-search-eligible',
+      status: 'pending',
+      source: 'aioverviews AI-readiness audit',
+      pendingReason: `No AI-readiness snapshot for ${client.company_name} yet. Run \`curl -H "Authorization: Bearer $BATCH_API_KEY" https://aioverviews.progrowth.services/api/cron/ai-readiness?client=${client.slug}\` to take the first one (~$0.03, ~30s).`,
+      warningThreshold: 'Any page drops out of Search eligibility, or a critical answer-engine bot becomes blocked',
+    })
+  }
 
   return cards
 }

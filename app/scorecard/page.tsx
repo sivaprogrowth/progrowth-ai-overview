@@ -1,7 +1,8 @@
 import Link from 'next/link'
 import { cookies } from 'next/headers'
 import KPIScorecard from '@/components/KPIScorecard'
-import { fetchKPIScorecard } from '@/lib/scorecard'
+import { fetchKPIScorecard, fetchAiReadinessFromSnapshot } from '@/lib/scorecard'
+import { buildRecommendations, type Recommendation } from '@/lib/recommendations'
 import { getClientFromCookies } from '@/lib/clientContext'
 
 export const dynamic = 'force-dynamic'
@@ -12,9 +13,17 @@ export default async function ScorecardPage() {
   const client = await getClientFromCookies(cookieJar)
 
   let initialCards = null
+  let initialRecommendations: Recommendation[] | undefined
   let generatedAt: string | undefined
   try {
-    initialCards = await fetchKPIScorecard(client)
+    const [cards, readiness] = await Promise.all([
+      fetchKPIScorecard(client),
+      fetchAiReadinessFromSnapshot(client),
+    ])
+    initialCards = cards
+    initialRecommendations = buildRecommendations(cards, readiness, {
+      verticals: client.verticals.flatMap((v) => [v.id, v.name, v.description].filter(Boolean)),
+    })
     generatedAt = new Date().toISOString()
   } catch {
     initialCards = null
@@ -54,7 +63,11 @@ export default async function ScorecardPage() {
           </div>
         </div>
 
-        <KPIScorecard initialCards={initialCards ?? undefined} generatedAt={generatedAt} />
+        <KPIScorecard
+          initialCards={initialCards ?? undefined}
+          initialRecommendations={initialRecommendations}
+          generatedAt={generatedAt}
+        />
       </div>
     </div>
   )

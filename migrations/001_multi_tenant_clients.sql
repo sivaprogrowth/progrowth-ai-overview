@@ -2,9 +2,12 @@
 -- Idempotent — safe to re-run. Backfills existing analyses rows to the
 -- 'progrowth' client so no historical data is orphaned.
 --
--- Apply via Supabase dashboard SQL editor:
---   https://app.supabase.com/project/wfnsctzivrvffultnxsq/sql/new
+-- Apply via Supabase dashboard SQL editor (project "Progrowth AI Overviews",
+-- the project NEXT_PUBLIC_SUPABASE_URL points at — ref jqpyzkqtnzzrhemnyegk):
+--   https://app.supabase.com/project/jqpyzkqtnzzrhemnyegk/sql/new
 -- Or via psql when available.
+-- NOTE: an earlier version of this comment referenced ref wfnsctzivrvffultnxsq,
+-- which is a DIFFERENT (paused, unrelated) project — do not use it.
 
 begin;
 

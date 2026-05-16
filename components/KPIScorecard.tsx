@@ -2,10 +2,71 @@
 
 import { useEffect, useState } from 'react'
 import type { KPICard } from '@/lib/scorecard'
+import type { Recommendation, RecommendationSeverity } from '@/lib/recommendations'
 
 interface Props {
   initialCards?: KPICard[]
+  initialRecommendations?: Recommendation[]
   generatedAt?: string
+}
+
+const REC_SEVERITY_STYLE: Record<
+  RecommendationSeverity,
+  { border: string; chip: string; label: string }
+> = {
+  critical: { border: 'border-red-800/60', chip: 'bg-red-500/15 text-red-300', label: 'CRITICAL' },
+  high: { border: 'border-amber-800/60', chip: 'bg-amber-500/15 text-amber-300', label: 'HIGH' },
+  medium: { border: 'border-sky-800/60', chip: 'bg-sky-500/15 text-sky-300', label: 'MEDIUM' },
+  low: { border: 'border-gray-800', chip: 'bg-gray-500/15 text-gray-300', label: 'LOW' },
+}
+
+function RecommendationsPanel({ recommendations }: { recommendations: Recommendation[] }) {
+  if (recommendations.length === 0) return null
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-900/60 p-5">
+      <div className="flex items-baseline justify-between mb-1">
+        <h3 className="text-lg font-semibold text-white">Recommended actions</h3>
+        <span className="text-xs text-gray-500">
+          {recommendations.length} · Google-aligned, impact-ordered
+        </span>
+      </div>
+      <p className="text-xs text-gray-500 mb-4">
+        Grounded in Google&apos;s documented guidance — AI eligibility is Search eligibility. No
+        AI-specific tactics.
+      </p>
+      <div className="space-y-3">
+        {recommendations.map((rec) => {
+          const s = REC_SEVERITY_STYLE[rec.severity]
+          return (
+            <div key={rec.id} className={`rounded-lg border ${s.border} bg-gray-950/40 p-4`}>
+              <div className="flex items-center gap-2 mb-2">
+                <span
+                  className={`text-[10px] font-semibold tracking-wider px-2 py-0.5 rounded ${s.chip}`}
+                >
+                  {s.label}
+                </span>
+                {rec.kpiId && (
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider">
+                    KPI {rec.kpiId}
+                  </span>
+                )}
+              </div>
+              <div className="text-sm text-gray-300 mb-2">{rec.finding}</div>
+              <div className="text-sm text-white font-medium mb-2">→ {rec.action}</div>
+              <a
+                href={rec.docUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-lime-400 underline-offset-2 hover:underline"
+              >
+                Google guidance ↗
+              </a>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 const STATUS_STYLE: Record<KPICard['status'], { dot: string; label: string; text: string }> = {
@@ -72,8 +133,15 @@ function Sparkline({ series }: { series: { weekLabel: string; visits: number }[]
   )
 }
 
-export default function KPIScorecard({ initialCards, generatedAt: initialGeneratedAt }: Props) {
+export default function KPIScorecard({
+  initialCards,
+  initialRecommendations,
+  generatedAt: initialGeneratedAt,
+}: Props) {
   const [cards, setCards] = useState<KPICard[] | null>(initialCards ?? null)
+  const [recommendations, setRecommendations] = useState<Recommendation[]>(
+    initialRecommendations ?? []
+  )
   const [generatedAt, setGeneratedAt] = useState<string | null>(initialGeneratedAt ?? null)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -86,6 +154,7 @@ export default function KPIScorecard({ initialCards, generatedAt: initialGenerat
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setCards(data.cards)
+      setRecommendations(data.recommendations ?? [])
       setGeneratedAt(data.generatedAt)
     } catch (err) {
       setError((err as Error).message)
@@ -138,6 +207,8 @@ export default function KPIScorecard({ initialCards, generatedAt: initialGenerat
           Last refreshed {new Date(generatedAt).toLocaleString()}
         </p>
       )}
+
+      <RecommendationsPanel recommendations={recommendations} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {cards.map((card) => {

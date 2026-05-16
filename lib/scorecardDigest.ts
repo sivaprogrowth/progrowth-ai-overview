@@ -12,8 +12,16 @@
  */
 
 import nodemailer from 'nodemailer'
-import { fetchKPIScorecard, type KPICard } from './scorecard'
+import { fetchKPIScorecard, fetchAiReadinessFromSnapshot, type KPICard } from './scorecard'
+import { buildRecommendations, type Recommendation } from './recommendations'
 import type { Client } from './clients'
+
+const REC_SEVERITY_COLOR: Record<Recommendation['severity'], string> = {
+  critical: '#ef4444',
+  high: '#f59e0b',
+  medium: '#0ea5e9',
+  low: '#6b7280',
+}
 
 const FALLBACK_RECIPIENT = process.env.DIGEST_EMAIL_RECIPIENT || 'siva@progrowth.services'
 const FROM_ADDRESS = '"ProGrowth GEO Scorecard" <siva@progrowth.services>'
@@ -103,7 +111,32 @@ function buildCardHtml(card: KPICard): string {
   `
 }
 
-function buildDigestHtml(client: Client, cards: KPICard[], snapshotDate: string): string {
+function buildRecommendationsHtml(recs: Recommendation[]): string {
+  if (recs.length === 0) return ''
+  const top = recs.slice(0, 3)
+  return `
+    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:12px;background:#fff;">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Top recommended actions · Google-aligned</div>
+      ${top
+        .map((r) => {
+          const c = REC_SEVERITY_COLOR[r.severity]
+          return `<div style="border-left:3px solid ${c};padding:4px 0 4px 12px;margin-bottom:14px;">
+            <div style="font-size:11px;font-weight:600;color:${c};text-transform:uppercase;letter-spacing:0.5px;">${r.severity}${r.kpiId ? ` · KPI ${r.kpiId}` : ''}</div>
+            <div style="font-size:13px;color:#374151;margin-top:4px;">${r.finding}</div>
+            <div style="font-size:13px;color:#111827;font-weight:600;margin-top:4px;">→ ${r.action}</div>
+            <a href="${r.docUrl}" style="font-size:12px;color:#84cc16;">Google guidance ↗</a>
+          </div>`
+        })
+        .join('')}
+    </div>`
+}
+
+function buildDigestHtml(
+  client: Client,
+  cards: KPICard[],
+  recs: Recommendation[],
+  snapshotDate: string
+): string {
   const dashboardUrl = `https://aioverviews.progrowth.services/clients/${client.slug}/scorecard`
   return `<!DOCTYPE html>
 <html>
@@ -114,6 +147,7 @@ function buildDigestHtml(client: Client, cards: KPICard[], snapshotDate: string)
       <div style="color:#84cc16;font-weight:700;font-size:14px;letter-spacing:1px;text-transform:uppercase;">ProGrowth · Weekly GEO Scorecard for ${client.company_name}</div>
       <div style="color:#6b7280;font-size:13px;margin-top:4px;">${snapshotDate}</div>
     </div>
+    ${buildRecommendationsHtml(recs)}
     ${cards.map(buildCardHtml).join('')}
     <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">
       Live dashboard: <a href="${dashboardUrl}" style="color:#84cc16;">${dashboardUrl.replace(/^https?:\/\//, '')}</a><br/>
@@ -124,9 +158,23 @@ function buildDigestHtml(client: Client, cards: KPICard[], snapshotDate: string)
 </html>`
 }
 
-function buildDigestText(client: Client, cards: KPICard[], snapshotDate: string): string {
+function buildDigestText(
+  client: Client,
+  cards: KPICard[],
+  recs: Recommendation[],
+  snapshotDate: string
+): string {
   const dashboardUrl = `https://aioverviews.progrowth.services/clients/${client.slug}/scorecard`
   const lines = [`PROGROWTH WEEKLY GEO SCORECARD — ${client.company_name} — ${snapshotDate}`, '']
+  if (recs.length > 0) {
+    lines.push('TOP RECOMMENDED ACTIONS (Google-aligned)')
+    for (const r of recs.slice(0, 3)) {
+      lines.push(`  [${r.severity.toUpperCase()}${r.kpiId ? ` · KPI ${r.kpiId}` : ''}] ${r.finding}`)
+      lines.push(`    -> ${r.action}`)
+      lines.push(`    ${r.docUrl}`)
+    }
+    lines.push('')
+  }
   for (const c of cards) {
     lines.push(`KPI ${c.id} · ${c.name}  [${c.status.toUpperCase()}]`)
     lines.push(`  ${c.question}`)
@@ -162,15 +210,21 @@ export async function sendScorecardDigest(client: Client, toEmail?: string): Pro
   }
 
   try {
-    const cards = await fetchKPIScorecard(client)
+    const [cards, readiness] = await Promise.all([
+      fetchKPIScorecard(client),
+      fetchAiReadinessFromSnapshot(client),
+    ])
+    const recommendations = buildRecommendations(cards, readiness, {
+      verticals: client.verticals.flatMap((v) => [v.id, v.name, v.description].filter(Boolean)),
+    })
     const snapshotDate = new Date().toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric',
     })
-    const html = buildDigestHtml(client, cards, snapshotDate)
-    const text = buildDigestText(client, cards, snapshotDate)
+    const html = buildDigestHtml(client, cards, recommendations, snapshotDate)
+    const text = buildDigestText(client, cards, recommendations, snapshotDate)
 
     const result = await transporter.sendMail({
       from: FROM_ADDRESS,

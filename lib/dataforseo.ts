@@ -1,10 +1,38 @@
+import { supabase } from '@/lib/supabase'
+
 const DATAFORSEO_BASE = 'https://api.dataforseo.com/v3'
+const DAILY_COST_CAP = parseFloat(process.env.DATAFORSEO_DAILY_CAP || '5')
 
 function getAuth(): string {
   const login = process.env.DATAFORSEO_LOGIN
   const password = process.env.DATAFORSEO_PASSWORD
   if (!login || !password) throw new Error('DataForSEO credentials not configured')
   return Buffer.from(`${login}:${password}`).toString('base64')
+}
+
+async function getDailySpend(): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10)
+  const { data } = await supabase
+    .from('api_cost_log')
+    .select('cost')
+    .eq('date', today)
+  if (!data) return 0
+  return data.reduce((sum: number, row: any) => sum + parseFloat(row.cost || 0), 0)
+}
+
+async function logApiCost(endpoint: string, cost: number, calls: number): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10)
+  await supabase.from('api_cost_log').insert({
+    date: today,
+    endpoint,
+    cost,
+    calls,
+  })
+}
+
+export async function checkDailyCap(): Promise<{ allowed: boolean; spent: number; cap: number }> {
+  const spent = await getDailySpend()
+  return { allowed: spent < DAILY_COST_CAP, spent, cap: DAILY_COST_CAP }
 }
 
 async function dfsPost<T = any>(path: string, body: object[]): Promise<T> {
@@ -20,7 +48,16 @@ async function dfsPost<T = any>(path: string, body: object[]): Promise<T> {
     const text = await res.text()
     throw new Error(`DataForSEO ${path} failed (${res.status}): ${text}`)
   }
-  return res.json()
+  const json = await res.json() as any
+
+  // Log cost from response
+  const taskCost = json?.cost || 0
+  const taskCount = json?.tasks_count || 1
+  if (taskCost > 0) {
+    logApiCost(path, taskCost, taskCount).catch(() => {})
+  }
+
+  return json as T
 }
 
 // ── LLM Mentions API (bulk, fast — Google + ChatGPT) ──
@@ -191,3 +228,131 @@ export const LLM_MODELS = {
   perplexity: 'sonar',
   claude: 'claude-haiku-4-5',
 } as const
+
+// ── On-Page Technical Audit (indexability + Core Web Vitals) ──
+//
+// Used by lib/aiReadiness.ts (KPI 6). Per Google's AI optimization guide,
+// eligibility for AI Overviews / AI Mode is *exactly* core Search snippet
+// eligibility — there is no AI-specific requirement. These two endpoints
+// cover the two automatable gates: indexability and page experience.
+//
+// Both are paid DataForSEO endpoints, so each call is guarded by
+// checkDailyCap() and throws DataForSeoCapExceededError if the daily
+// spend cap (DATAFORSEO_DAILY_CAP) is already reached. dfsPost() logs the
+// actual cost from the response into api_cost_log.
+
+export class DataForSeoCapExceededError extends Error {
+  constructor(public spent: number, public cap: number) {
+    super(`DataForSEO daily cost cap reached ($${spent.toFixed(2)} / $${cap}). Skipping paid on-page call.`)
+    this.name = 'DataForSeoCapExceededError'
+  }
+}
+
+async function assertUnderCap(): Promise<void> {
+  const { allowed, spent, cap } = await checkDailyCap()
+  if (!allowed) throw new DataForSeoCapExceededError(spent, cap)
+}
+
+export interface OnPageInstantResult {
+  url: string
+  statusCode: number
+  fetchTimeMs: number | null
+  title: string | null
+  description: string | null
+  canonical: string | null
+  wordCount: number | null
+  isHttps: boolean | null
+  /** Full DataForSEO on-page `checks` boolean map (is_https, canonical, is_redirect, is_4xx_code, …). */
+  checks: Record<string, boolean>
+  cost: number
+  /** Raw page item — aiReadiness.ts drills in for anything not normalized here. */
+  raw: any
+}
+
+/**
+ * DataForSEO On-Page Instant Pages (~$0.0006/page). Crawls one URL with
+ * JS/browser rendering on and returns normalized indexability signals.
+ * Note: noindex / nosnippet / X-Robots-Tag detection is done separately in
+ * aiReadiness.ts via a direct fetch of the page HTML + headers, since those
+ * directives are exact, free, and not reliably surfaced by this endpoint.
+ */
+export async function fetchOnPageInstant(url: string): Promise<OnPageInstantResult> {
+  await assertUnderCap()
+  const json = await dfsPost('/on_page/instant_pages', [
+    {
+      url,
+      enable_javascript: true,
+      enable_browser_rendering: true,
+      load_resources: true,
+    },
+  ])
+  const item = json?.tasks?.[0]?.result?.[0]?.items?.[0] ?? {}
+  const meta = item.meta ?? {}
+  return {
+    url: item.url ?? url,
+    statusCode: item.status_code ?? 0,
+    fetchTimeMs: item.page_timing?.duration_time ?? item.fetch_time ?? null,
+    title: meta.title ?? null,
+    description: meta.description ?? null,
+    canonical: meta.canonical ?? null,
+    wordCount: meta.content?.plain_text_word_count ?? null,
+    isHttps: typeof item.checks?.is_https === 'boolean' ? item.checks.is_https : null,
+    checks: item.checks ?? {},
+    cost: json?.cost ?? 0,
+    raw: item,
+  }
+}
+
+export interface OnPageLighthouseResult {
+  /** Lighthouse performance category score, 0–100 (null if unavailable). */
+  performanceScore: number | null
+  /** Largest Contentful Paint, ms. Google "good" ≤ 2500. */
+  lcpMs: number | null
+  /** Cumulative Layout Shift, unitless. Google "good" ≤ 0.1. */
+  cls: number | null
+  /** Total Blocking Time, ms — lab proxy for INP. Google "good" INP ≤ 200. */
+  tbtMs: number | null
+  fcpMs: number | null
+  speedIndexMs: number | null
+  cost: number
+  raw: any
+}
+
+/**
+ * DataForSEO On-Page Lighthouse live JSON (~$0.004/page), mobile profile.
+ * Returns the Core Web Vitals lab metrics mapped to Google's page-experience
+ * thresholds. Response mirrors Google's Lighthouse JSON (audits keyed by id,
+ * numericValue in ms; categories.performance.score 0–1).
+ */
+export async function fetchOnPageLighthouse(url: string): Promise<OnPageLighthouseResult> {
+  await assertUnderCap()
+  // NOTE: the live/json endpoint does NOT accept an `audits` request field —
+  // sending it returns task error 40501 "Invalid Field: 'audits'" (cost 0,
+  // no result). Request only `categories`; the full Lighthouse `audits` map
+  // comes back in result[0].audits and is parsed below.
+  const json = await dfsPost('/on_page/lighthouse/live/json', [
+    {
+      url,
+      for_mobile: true,
+      categories: ['performance'],
+    },
+  ])
+  const result = json?.tasks?.[0]?.result?.[0] ?? {}
+  const audits = result.audits ?? result?.lighthouse_result?.audits ?? {}
+  const categories = result.categories ?? result?.lighthouse_result?.categories ?? {}
+  const num = (id: string): number | null => {
+    const v = audits?.[id]?.numericValue
+    return typeof v === 'number' ? Math.round(v * 1000) / 1000 : null
+  }
+  const perfScore = categories?.performance?.score
+  return {
+    performanceScore: typeof perfScore === 'number' ? Math.round(perfScore * 100) : null,
+    lcpMs: num('largest-contentful-paint'),
+    cls: num('cumulative-layout-shift'),
+    tbtMs: num('total-blocking-time'),
+    fcpMs: num('first-contentful-paint'),
+    speedIndexMs: num('speed-index'),
+    cost: json?.cost ?? 0,
+    raw: result,
+  }
+}
