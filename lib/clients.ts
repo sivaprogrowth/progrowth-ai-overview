@@ -127,11 +127,19 @@ export const getClientById = unstable_cache(
   { revalidate: CACHE_TTL_SECONDS, tags: ['clients'] }
 )
 
-export const listActiveClients = unstable_cache(
-  fetchActiveClients,
-  ['active-clients'],
-  { revalidate: CACHE_TTL_SECONDS, tags: ['clients'] }
-)
+/**
+ * Always fresh — deliberately NOT unstable_cache'd.
+ *
+ * A cached empty list is a correctness hazard, not a perf win: it once
+ * pinned `[]` (cached before the migration seed, never invalidated since
+ * `revalidateTag('clients')` only fires on client creation) so /clients
+ * showed a false "did the migration run?" and the cron fan-out would have
+ * dispatched to zero clients. The table is tiny and this is called only by
+ * the (force-dynamic) /clients page, /api/clients, and the cron fan-out —
+ * a direct query each time is cheap and safe. The per-key getClientBySlug/
+ * getClientById stay cached (hot per-request, self-populating correctly).
+ */
+export const listActiveClients = fetchActiveClients
 
 export const DEFAULT_CLIENT_SLUG = 'progrowth'
 
