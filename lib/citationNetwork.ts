@@ -22,6 +22,7 @@
  * change week-over-week. Re-run quarterly or when strategy shifts.
  */
 
+import { type Engine, ALL_ENGINES } from './engines'
 import { type CanonicalPrompt } from './prompts'
 import { getPromptsForClient, getClustersForClient } from './prompts'
 import { type Client, getBrandDomainSet } from './clients'
@@ -45,9 +46,11 @@ function extractDomain(input: string | undefined | null): string | null {
   }
 }
 
-export type Engine = 'chatgpt' | 'claude' | 'perplexity' | 'gemini'
-
-export const ALL_ENGINES: Engine[] = ['chatgpt', 'claude', 'perplexity', 'gemini']
+// Re-export the leaf bindings (imported above for internal use) so existing
+// server-side `from '@/lib/citationNetwork'` importers keep working
+// unchanged, while client components import from '@/lib/engines' directly
+// to avoid bundling lib/supabase into the browser.
+export { type Engine, ALL_ENGINES }
 
 // ── Per-engine cited-domain fetchers ──────────────────────────────────────
 

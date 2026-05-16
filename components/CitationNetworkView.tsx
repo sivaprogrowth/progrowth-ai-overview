@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { ALL_ENGINES, type Engine } from '@/lib/citationNetwork'
+import { ALL_ENGINES, type Engine } from '@/lib/engines'
 import type { CitationNetworkSnapshot, MentionType } from '@/lib/citationNetworkFetcher'
 
 const SENTIMENT_STYLE: Record<MentionType, { label: string; chip: string; description: string }> = {
