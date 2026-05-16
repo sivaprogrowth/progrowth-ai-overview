@@ -123,6 +123,16 @@ export async function fetchCitationNetworkSnapshot(client: Client): Promise<Cita
     const perCellRaw = s?.perCell as Record<string, Record<Engine, any[]>> | undefined
     if (!perCellRaw) continue
     for (const clusterId of Object.keys(perCellRaw)) {
+      // Only treat a cluster as present in THIS snapshot if its cell
+      // actually has ≥1 cited domain in some engine. computeCitationNetwork
+      // writes all cluster keys even for a single-cluster run (4 empty),
+      // so without this an fsm-only snapshot would shadow every cluster —
+      // breaking the latest-per-cluster merge of cluster-scoped runs and
+      // inflating clustersCovered to a misleading "5/5".
+      const cell = perCellRaw[clusterId]
+      const hasData =
+        !!cell && ALL_ENGINES.some((e) => Array.isArray(cell[e]) && cell[e].length > 0)
+      if (!hasData) continue
       if (!latestPerCluster.has(clusterId)) {
         latestPerCluster.set(clusterId, { summary: s, created_at: row.created_at })
       }
