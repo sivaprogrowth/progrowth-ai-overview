@@ -20,6 +20,47 @@ export function shouldFanOut(req: NextRequest): boolean {
   return !req.nextUrl.searchParams.get('client')
 }
 
+/**
+ * Generic value fan-out: dispatch one self-fetch per `values[i]`, setting
+ * `?{param}={value}` (parent params preserved, auth forwarded, run in
+ * parallel as separate Vercel invocations). Used by citation-network to
+ * split a client into 5 cluster-scoped sub-runs — a single full run 504s
+ * past the 60s function cap, but each cluster (~5 prompts) finishes well
+ * under it and the fetcher merges the latest snapshot per cluster.
+ */
+export async function fanOutValues(
+  req: NextRequest,
+  path: string,
+  param: string,
+  values: string[]
+): Promise<NextResponse> {
+  const origin = req.nextUrl.origin
+  const cronSecret = process.env.CRON_SECRET
+  const auth = cronSecret ? `Bearer ${cronSecret}` : req.headers.get('authorization')
+
+  const dispatched = await Promise.allSettled(
+    values.map((value) => {
+      const url = new URL(`${origin}${path}`)
+      req.nextUrl.searchParams.forEach((v, k) => url.searchParams.set(k, v))
+      url.searchParams.set(param, value)
+      return fetch(url.toString(), {
+        headers: auth ? { Authorization: auth } : {},
+        signal: AbortSignal.timeout(55_000),
+      }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }))
+    })
+  )
+
+  return NextResponse.json({
+    mode: `fan-out:${param}`,
+    [param]: values,
+    dispatched: dispatched.map((d, i) =>
+      d.status === 'fulfilled'
+        ? { value: values[i], ok: d.value.status < 400, status: d.value.status }
+        : { value: values[i], ok: false, error: String(d.reason) }
+    ),
+  })
+}
+
 export async function fanOutToClients(
   req: NextRequest,
   path: string,

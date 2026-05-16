@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { computeCitationNetwork, ALL_ENGINES, type Engine } from '@/lib/citationNetwork'
-import { getPromptsForClient } from '@/lib/prompts'
+import { getPromptsForClient, getClustersForClient } from '@/lib/prompts'
 import { getClientFromRequest } from '@/lib/clientContext'
-import { fanOutToClients, shouldFanOut } from '@/lib/cronFanout'
+import { fanOutToClients, fanOutValues, shouldFanOut } from '@/lib/cronFanout'
 import type { Client } from '@/lib/clients'
 import { supabase } from '@/lib/supabase'
 
@@ -25,14 +25,31 @@ export const maxDuration = 60
  *   ?clusters=fcmo,fsm       limit to specific clusters
  *
  * Path lives under /api/cron so middleware's Bearer-token allowlist
- * applies. Called WITHOUT ?client= it fans out to every cron_enabled
- * client (one self-fetch each), preserving ?engines=/?clusters=.
+ * applies. Two levels of fan-out keep every sub-run under the 60s
+ * Vercel function cap (a single full client run 504s):
+ *   • no ?client=               → fan out per cron_enabled client
+ *   • ?client= but no ?clusters= → fan out per cluster (one self-fetch
+ *                                  each, ~5 prompts → < 60s); the fetcher
+ *                                  merges the latest snapshot per cluster
+ *   • ?client= & ?clusters=<id> → actually compute that cluster
  */
 export async function GET(req: NextRequest) {
   if (shouldFanOut(req)) {
     return fanOutToClients(req, '/api/cron/citation-network')
   }
   const client = await getClientFromRequest(req)
+
+  // Per-cluster fan-out: split a client into one sub-run per cluster so
+  // none exceeds the 60s cap. Skipped when ?clusters= is already set
+  // (that's the leaf that does the real work) or the client has ≤1
+  // cluster (nothing to split).
+  if (!req.nextUrl.searchParams.get('clusters')) {
+    const clusterIds = getClustersForClient(client).map((c) => c.id)
+    if (clusterIds.length > 1) {
+      return fanOutValues(req, '/api/cron/citation-network', 'clusters', clusterIds)
+    }
+  }
+
   return runForClient(client, req)
 }
 
