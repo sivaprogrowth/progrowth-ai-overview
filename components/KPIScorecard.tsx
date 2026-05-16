@@ -8,6 +8,10 @@ interface Props {
   initialCards?: KPICard[]
   initialRecommendations?: Recommendation[]
   generatedAt?: string
+  /** When set, the refresh button re-fetches scoped to this client slug
+   *  (used by /clients/[slug]/scorecard). Omitted on the cookie-based
+   *  /scorecard page, where the API resolves the client from the cookie. */
+  clientSlug?: string
 }
 
 const REC_SEVERITY_STYLE: Record<
@@ -137,6 +141,7 @@ export default function KPIScorecard({
   initialCards,
   initialRecommendations,
   generatedAt: initialGeneratedAt,
+  clientSlug,
 }: Props) {
   const [cards, setCards] = useState<KPICard[] | null>(initialCards ?? null)
   const [recommendations, setRecommendations] = useState<Recommendation[]>(
@@ -150,7 +155,10 @@ export default function KPIScorecard({
     setRefreshing(true)
     setError(null)
     try {
-      const res = await fetch('/api/scorecard', { cache: 'no-store' })
+      const res = await fetch(
+        clientSlug ? `/api/scorecard?client=${encodeURIComponent(clientSlug)}` : '/api/scorecard',
+        { cache: 'no-store' }
+      )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setCards(data.cards)
