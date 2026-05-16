@@ -34,6 +34,11 @@ export async function POST(req: NextRequest) {
       competitorSites: Array.isArray(body.competitorSites)
         ? body.competitorSites.map(String)
         : undefined,
+      products: Array.isArray(body.products) ? body.products.map(String) : undefined,
+      samplePrompts: Array.isArray(body.samplePrompts)
+        ? body.samplePrompts.map(String)
+        : undefined,
+      icpDescription: body.icpDescription ? String(body.icpDescription) : undefined,
     })
     return NextResponse.json(result)
   } catch (err) {

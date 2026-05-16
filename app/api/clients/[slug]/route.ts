@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { revalidateTag } from 'next/cache'
 import { getClientBySlug } from '@/lib/clients'
-import { toList, toDomainList } from '@/lib/clientInput'
+import { toList, toDomainList, toIcpProfile } from '@/lib/clientInput'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -59,10 +59,13 @@ export async function PATCH(
   if ('competitor_sites' in body) {
     patch.competitor_sites = toDomainList(body.competitor_sites)
   }
+  if ('icp_profile' in body) {
+    patch.icp_profile = toIcpProfile(body.icp_profile)
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json(
-      { error: 'No editable fields provided (verticals, prompts, brand_description, probe_queries, competitor_sites)' },
+      { error: 'No editable fields provided (verticals, prompts, brand_description, probe_queries, competitor_sites, icp_profile)' },
       { status: 400 }
     )
   }

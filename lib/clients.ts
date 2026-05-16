@@ -22,6 +22,23 @@ export interface KpiBaseline {
 
 export type KpiBaselineSet = Partial<Record<'1' | '2' | '3' | '4' | '5', KpiBaseline>>
 
+/** Structured ICP onboarding inputs (migration 004). Company description
+ *  stays in `brand_description`; competitors in `competitor_sites`. These
+ *  seed the prompt generator and are re-shown on the edit form. */
+export interface IcpProfile {
+  products: string[]
+  verticals: string[]
+  samplePrompts: string[]
+  icpDescription: string
+}
+
+export const EMPTY_ICP_PROFILE: IcpProfile = {
+  products: [],
+  verticals: [],
+  samplePrompts: [],
+  icpDescription: '',
+}
+
 export interface Client {
   id: string
   slug: string
@@ -33,6 +50,8 @@ export interface Client {
    *  slots, highlighted in citation-network, fed to the prompt generator.
    *  Empty = competitors are purely auto-derived (any non-brand domain). */
   competitor_sites: string[]
+  /** Structured ICP onboarding inputs that seed AI prompt generation. */
+  icp_profile: IcpProfile
   brand_description: string
   /** Empty array = fall back to the default PROMPT_CLUSTERS in lib/prompts */
   verticals: PromptCluster[]
@@ -56,7 +75,7 @@ const CACHE_TTL_SECONDS = 300
 
 const SELECT_COLUMNS = `
   id, slug, company_name, primary_domain, alt_domains,
-  brand_name_patterns, competitor_sites, brand_description, verticals, prompts,
+  brand_name_patterns, competitor_sites, icp_profile, brand_description, verticals, prompts,
   probe_queries, matomo_site_id, matomo_url, kpi_baselines,
   is_active, cron_enabled, notification_email,
   created_at, updated_at
@@ -64,6 +83,18 @@ const SELECT_COLUMNS = `
 
 function ensureType<T>(value: unknown, fallback: T): T {
   return (value === null || value === undefined) ? fallback : (value as T)
+}
+
+function normaliseIcpProfile(raw: any): IcpProfile {
+  const p = raw && typeof raw === 'object' ? raw : {}
+  const arr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : []
+  return {
+    products: arr(p.products),
+    verticals: arr(p.verticals),
+    samplePrompts: arr(p.samplePrompts),
+    icpDescription: typeof p.icpDescription === 'string' ? p.icpDescription : '',
+  }
 }
 
 function normaliseRow(row: any): Client {
@@ -75,6 +106,7 @@ function normaliseRow(row: any): Client {
     alt_domains: ensureType<string[]>(row.alt_domains, []),
     brand_name_patterns: ensureType<string[]>(row.brand_name_patterns, []),
     competitor_sites: ensureType<string[]>(row.competitor_sites, []),
+    icp_profile: normaliseIcpProfile(row.icp_profile),
     brand_description: row.brand_description ?? '',
     verticals: ensureType<PromptCluster[]>(row.verticals, []),
     prompts: ensureType<CanonicalPrompt[]>(row.prompts, []),

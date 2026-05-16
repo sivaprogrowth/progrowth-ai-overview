@@ -17,14 +17,14 @@ export default async function EditClientPage({
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <div className="max-w-2xl mx-auto px-4 py-8">
+      <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="mb-8 flex items-end justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold">
-              Edit <span className="text-lime-400">{client.company_name}</span>
+              ICP Setup · <span className="text-lime-400">{client.company_name}</span>
             </h1>
             <p className="text-gray-400 mt-1 text-sm">
-              ICP / target verticals · {client.primary_domain}{' '}
+              Done at onboarding, rarely changed · {client.primary_domain}{' '}
               <span className="text-gray-600">·</span> /{client.slug}
             </p>
           </div>
@@ -41,10 +41,10 @@ export default async function EditClientPage({
           companyName={client.company_name}
           primaryDomain={client.primary_domain}
           brandDescription={client.brand_description}
-          probeQueries={client.probe_queries}
           competitorSites={client.competitor_sites}
-          verticalsCount={client.verticals.length}
-          promptsCount={client.prompts.length}
+          icpProfile={client.icp_profile}
+          clusters={client.verticals}
+          prompts={client.prompts}
         />
       </div>
     </div>

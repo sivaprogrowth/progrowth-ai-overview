@@ -29,6 +29,12 @@ export interface GeneratePromptsInput {
   /** Configured competitor domains — a few are woven in so the set
    *  includes real "Company vs <competitor>" comparative prompts. */
   competitorSites?: string[]
+  /** Products/services to focus prompts on. */
+  products?: string[]
+  /** Example prompts the human seeded — used as a few-shot style anchor. */
+  samplePrompts?: string[]
+  /** Ideal-customer-profile / buyer designations description. */
+  icpDescription?: string
 }
 
 export interface GeneratedPromptSet {
@@ -85,24 +91,34 @@ const PROMPT_TAIL =
   `5/5/10/5. Real buyer questions only — never AEO/llms.txt/schema coaching.`
 
 function buildPrompt(input: GeneratePromptsInput): string {
-  const name = input.companyName.trim().slice(0, 40)
-  const domain = input.primaryDomain.trim().slice(0, 40)
-  const hint = input.verticalsHint?.filter(Boolean).join(', ')
-  const ctxFull = (input.description?.trim() || hint || '').replace(/\s+/g, ' ')
+  const clean = (s: string) => s.replace(/\s+/g, ' ').trim()
+  const name = clean(input.companyName).slice(0, 40)
+  const domain = clean(input.primaryDomain).slice(0, 40)
+  const desc = clean(input.description ?? '')
+  const verts = (input.verticalsHint ?? []).map((s) => s.trim()).filter(Boolean).join(',')
+  const icp = clean(input.icpDescription ?? '')
+  const prods = (input.products ?? []).map((s) => s.trim()).filter(Boolean).join(',')
+  const sample = (input.samplePrompts ?? []).map((s) => clean(s)).filter(Boolean)[0] ?? ''
   const comps = (input.competitorSites ?? [])
     .map((c) => c.trim())
     .filter(Boolean)
-    .slice(0, 4)
+    .slice(0, 3)
     .join(',')
 
-  // Variable head, hard-clamped so head + PROMPT_TAIL stays ≤ 500
-  // (DataForSEO rejects user_prompt > ~500 with a misleading 40501 —
-  // see lib/dataforseo.ts / memory dataforseo-chatgpt-user-prompt-500).
-  let head = `Company "${name}" (${domain})`
-  if (ctxFull) head += ` — ${ctxFull}`
-  if (comps) head += `. Competitors: ${comps}; include 2-3 "${name} vs <competitor>" comparative prompts`
-  head = head.slice(0, 500 - PROMPT_TAIL.length - 1) + '.'
+  // Priority-ordered, per-segment-capped head. The whole head is then
+  // hard-clamped so head + PROMPT_TAIL stays ≤ 500 (DataForSEO rejects
+  // user_prompt > ~500 with a misleading 40501 — see lib/dataforseo.ts /
+  // memory dataforseo-chatgpt-user-prompt-500). Lower-priority segments
+  // are dropped by the clamp before company/verticals/ICP are touched.
+  const seg: string[] = [`Company "${name}" (${domain})`]
+  if (desc) seg.push(`— ${desc.slice(0, 70)}`)
+  if (verts) seg.push(`Verticals:${verts.slice(0, 36)}`)
+  if (icp) seg.push(`ICP:${icp.slice(0, 46)}`)
+  if (prods) seg.push(`Products:${prods.slice(0, 38)}`)
+  if (sample) seg.push(`Eg:"${sample.slice(0, 46)}"`)
+  if (comps) seg.push(`Competitors:${comps.slice(0, 36)}; add "${name} vs <competitor>" prompts`)
 
+  const head = seg.join('. ').slice(0, 500 - PROMPT_TAIL.length - 1) + '.'
   return (head + PROMPT_TAIL).slice(0, 500)
 }
 

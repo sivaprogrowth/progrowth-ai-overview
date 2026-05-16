@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { revalidateTag } from 'next/cache'
 import { listActiveClients } from '@/lib/clients'
-import { toList, cleanDomain, toDomainList } from '@/lib/clientInput'
+import { toList, cleanDomain, toDomainList, toIcpProfile } from '@/lib/clientInput'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -79,6 +79,7 @@ export async function POST(req: NextRequest) {
     alt_domains: toList(body.alt_domains),
     brand_name_patterns: toList(body.brand_name_patterns),
     competitor_sites: toDomainList(body.competitor_sites),
+    icp_profile: toIcpProfile(body.icp_profile),
     brand_description: String(body.brand_description ?? '').trim(),
     // AI-generated set from /api/clients/generate-prompts when present;
     // otherwise empty → lib/clients falls back to CANONICAL_PROMPTS.

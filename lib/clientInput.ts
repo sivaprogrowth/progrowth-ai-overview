@@ -24,3 +24,23 @@ export function cleanDomain(v: string): string {
 export function toDomainList(v: unknown): string[] {
   return [...new Set(toList(v).map(cleanDomain).filter(Boolean))]
 }
+
+export interface IcpProfileInput {
+  products: string[]
+  verticals: string[]
+  samplePrompts: string[]
+  icpDescription: string
+}
+
+/** Normalise a raw icp_profile body object — sub-arrays via toList,
+ *  icpDescription trimmed. Tolerates partial/garbage input. */
+export function toIcpProfile(v: unknown): IcpProfileInput {
+  const p = v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  return {
+    products: toList(p.products),
+    verticals: toList(p.verticals),
+    samplePrompts: toList(p.samplePrompts),
+    icpDescription:
+      typeof p.icpDescription === 'string' ? p.icpDescription.trim() : '',
+  }
+}
