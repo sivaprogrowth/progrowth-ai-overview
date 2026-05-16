@@ -29,6 +29,12 @@ export default async function ClientsPage() {
           </div>
           <div className="flex gap-4 text-sm">
             <Link
+              href="/clients/new"
+              className="text-lime-400 hover:text-lime-300 underline-offset-2 hover:underline font-medium"
+            >
+              + New client
+            </Link>
+            <Link
               href="/scorecard"
               className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
             >
