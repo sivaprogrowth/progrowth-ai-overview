@@ -354,7 +354,7 @@ async function discoverSitemapUrls(host: string, limit: number): Promise<string[
   try {
     const locs = await fetchSitemapLocs(`https://${host}/sitemap.xml`)
     const childSitemaps = locs.filter((l) => /\.xml($|\?)/i.test(l)).slice(0, 3)
-    let pageUrls = locs.filter((l) => !/\.xml($|\?)/i.test(l))
+    const pageUrls = locs.filter((l) => !/\.xml($|\?)/i.test(l))
 
     if (pageUrls.length === 0 && childSitemaps.length > 0) {
       for (const sm of childSitemaps) {
