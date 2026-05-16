@@ -356,3 +356,41 @@ export async function fetchOnPageLighthouse(url: string): Promise<OnPageLighthou
     raw: result,
   }
 }
+
+// ── ChatGPT free-form completion (text generation) ────────────────────────
+//
+// Uses the same chat_gpt/llm_responses endpoint geoSeoGap relies on (works
+// on this account tier — unlike llm_mentions which 40204s). Returns the
+// concatenated answer text. Cap-guarded; dfsPost logs the (~$0.001) cost.
+// `webSearch` defaults false for deterministic generation tasks.
+
+export interface ChatgptCompletion {
+  text: string
+  cost: number
+}
+
+export async function fetchChatgptCompletion(
+  userPrompt: string,
+  opts: { webSearch?: boolean; modelName?: string } = {}
+): Promise<ChatgptCompletion> {
+  await assertUnderCap()
+  // HARD LIMIT: this endpoint rejects user_prompt > ~500 chars with a
+  // misleading task error 40501 "Invalid Field: 'user_prompt'" (verified
+  // empirically: 500 OK, 550+ fails). Callers must keep prompts terse.
+  const json = await dfsPost('/ai_optimization/chat_gpt/llm_responses/live', [
+    {
+      user_prompt: userPrompt.slice(0, 500),
+      model_name: opts.modelName ?? 'gpt-4o-mini',
+      web_search: opts.webSearch ?? false,
+    },
+  ])
+  const items = json?.tasks?.[0]?.result?.[0]?.items ?? []
+  const parts: string[] = []
+  for (const item of items) {
+    if (typeof item?.text === 'string' && item.text.trim()) parts.push(item.text)
+    for (const section of item?.sections ?? []) {
+      if (typeof section?.text === 'string' && section.text.trim()) parts.push(section.text)
+    }
+  }
+  return { text: parts.join('\n').trim(), cost: json?.cost ?? 0 }
+}

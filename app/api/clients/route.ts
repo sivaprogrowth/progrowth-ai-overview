@@ -91,8 +91,10 @@ export async function POST(req: NextRequest) {
     alt_domains: toList(body.alt_domains),
     brand_name_patterns: toList(body.brand_name_patterns),
     brand_description: String(body.brand_description ?? '').trim(),
-    verticals: [],
-    prompts: [],
+    // AI-generated set from /api/clients/generate-prompts when present;
+    // otherwise empty → lib/clients falls back to CANONICAL_PROMPTS.
+    verticals: Array.isArray(body.verticals) ? body.verticals : [],
+    prompts: Array.isArray(body.prompts) ? body.prompts : [],
     probe_queries: [],
     matomo_site_id: body.matomo_site_id ? String(body.matomo_site_id).trim() : null,
     matomo_url: body.matomo_url ? String(body.matomo_url).trim().replace(/\/+$/, '') : null,

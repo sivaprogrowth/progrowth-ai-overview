@@ -31,6 +31,48 @@ export default function NewClientPage() {
   const [cronEnabled, setCronEnabled] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState<string | null>(null)
+  const [generated, setGenerated] = useState<{
+    clusters: { id: string; name: string; description: string }[]
+    prompts: { id: string; text: string; type: string; cluster: string }[]
+    rejected: string[]
+  } | null>(null)
+
+  async function handleGenerate() {
+    setGenError(null)
+    if (!companyName.trim() || !primaryDomain.trim()) {
+      setGenError('Enter company name and primary domain first.')
+      return
+    }
+    setGenerating(true)
+    try {
+      const res = await fetch('/api/clients/generate-prompts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          companyName,
+          primaryDomain,
+          description: brandDescription,
+          verticalsHint: brandPatterns
+            ? brandPatterns.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+            : undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      setGenerated({
+        clusters: data.clusters,
+        prompts: data.prompts,
+        rejected: data.rejected ?? [],
+      })
+    } catch (err: any) {
+      setGenError(err.message || 'Generation failed')
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   const effectiveSlug = slugEdited ? slug : slugify(companyName)
 
@@ -54,6 +96,11 @@ export default function NewClientPage() {
           matomo_site_id: matomoSiteId,
           matomo_url: matomoUrl,
           cron_enabled: cronEnabled,
+          // Persist the AI-generated set when previewed; else server
+          // leaves them empty and CANONICAL_PROMPTS defaults apply.
+          ...(generated
+            ? { verticals: generated.clusters, prompts: generated.prompts }
+            : {}),
         }),
       })
       const data = await res.json()
@@ -215,6 +262,43 @@ export default function NewClientPage() {
                 className={inputCls}
               />
             </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-gray-200">
+                  Tailored prompt set <span className="text-gray-500">(optional)</span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  AI-generate 5 clusters × 25 buyer-intent prompts for this
+                  company. Skip and it inherits the default canonical set.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={generating}
+                className="shrink-0 text-xs px-3 py-2 rounded-md border border-lime-700/50 bg-lime-500/10 text-lime-300 hover:bg-lime-500/20 disabled:opacity-50"
+              >
+                {generating ? 'Generating…' : generated ? 'Regenerate' : '✨ Generate prompts'}
+              </button>
+            </div>
+            {genError && (
+              <div className="text-xs text-red-300">{genError}</div>
+            )}
+            {generated && (
+              <div className="text-xs text-gray-400 space-y-1">
+                <div className="text-emerald-300">
+                  ✓ {generated.clusters.length} clusters · {generated.prompts.length} prompts ready
+                  {generated.rejected.length > 0 &&
+                    ` · ${generated.rejected.length} dropped by guardrail`}
+                </div>
+                <div className="text-gray-500">
+                  {generated.clusters.map((c) => c.name).join(' · ')}
+                </div>
+              </div>
+            )}
           </div>
 
           <label className="flex items-center gap-3 text-sm text-gray-300">
