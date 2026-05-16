@@ -76,6 +76,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'all' | 'gaps'>('all')
   const [deepDiveResult, setDeepDiveResult] = useState<DeepDiveResult | null>(null)
   const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null)
+  const [matomoMode, setMatomoMode] = useState(false)
+  const [matomoPeriod, setMatomoPeriod] = useState<'week' | 'month'>('week')
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
@@ -97,6 +99,7 @@ export default function Home() {
     setActiveTab('all')
     setDeepDiveResult(null)
     setBulkProgress(null)
+    setMatomoMode(false)
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -153,6 +156,7 @@ export default function Home() {
     setError(null)
     setDeepDiveResult(null)
     setBulkProgress(null)
+    setMatomoMode(false)
 
     try {
       const res = await fetch(`/api/analyses/${id}`)
@@ -185,6 +189,7 @@ export default function Home() {
     setDomain(dom)
     setActiveTab('all')
     setDeepDiveResult(null)
+    setMatomoMode(false)
     setBulkProgress({ completed: 0, total: keywords.length })
 
     const CHUNK_SIZE = 15
@@ -239,6 +244,53 @@ export default function Home() {
     setIsRunning(false)
   }, [])
 
+  // Reveal the AI Crawls panel (cheap — does NOT auto-run the paid analysis;
+  // the panel has an explicit Run button so a stray tab click can't trigger
+  // a 60s/paid Matomo+DataForSEO job).
+  const handleMatomoMode = useCallback(() => {
+    setEvents([])
+    setRows([])
+    setSummary(null)
+    setCsvData(null)
+    setError(null)
+    setDeepDiveResult(null)
+    setBulkProgress(null)
+    setMatomoMode(true)
+  }, [])
+
+  const runMatomoAnalysis = useCallback(async () => {
+    setIsRunning(true)
+    setError(null)
+    setEvents([])
+    setRows([])
+    setSummary(null)
+    setCsvData(null)
+    setDeepDiveResult(null)
+
+    try {
+      const res = await fetch('/api/matomo/crawls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ period: matomoPeriod }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      if (!data.rows || data.rows.length === 0) {
+        setError(data.message || 'No AI bot crawls found for this period.')
+        return
+      }
+      setDomain(data.summary?.domain ?? '')
+      setRows(data.rows)
+      setSummary(data.summary)
+      setCsvData(generateCSV(data.rows))
+    } catch (err: any) {
+      setError(err.message || 'Matomo crawl analysis failed')
+    } finally {
+      setIsRunning(false)
+    }
+  }, [matomoPeriod])
+
   if (checkingAuth) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -284,8 +336,42 @@ export default function Home() {
             <AnalysisForm
               onSubmit={handleSubmit}
               onBulkCsvSubmit={handleBulkCsvSubmit}
+              onMatomoMode={handleMatomoMode}
               isRunning={isRunning}
             />
+
+            {matomoMode && (
+              <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
+                <div className="text-sm font-medium text-gray-200">AI Crawls Analysis</div>
+                <p className="text-xs text-gray-500">
+                  Pulls the pages AI bots crawled (from Matomo), derives keywords, and
+                  checks your Google&nbsp;AI Overview + ChatGPT visibility for them.
+                </p>
+                <div>
+                  <label htmlFor="matomo-period" className="block text-xs text-gray-400 mb-1">
+                    Period
+                  </label>
+                  <select
+                    id="matomo-period"
+                    value={matomoPeriod}
+                    onChange={(e) => setMatomoPeriod(e.target.value as 'week' | 'month')}
+                    disabled={isRunning}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-lime-500 disabled:opacity-50"
+                  >
+                    <option value="week">This week</option>
+                    <option value="month">This month</option>
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={runMatomoAnalysis}
+                  disabled={isRunning}
+                  className="w-full py-2.5 px-4 bg-lime-500 hover:bg-lime-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-black font-semibold rounded-lg text-sm transition-colors"
+                >
+                  {isRunning ? 'Analyzing crawled pages…' : 'Run AI Crawls Analysis'}
+                </button>
+              </div>
+            )}
 
             <AnalysisHistory
               onLoadAnalysis={loadPastAnalysis}

@@ -6,11 +6,12 @@ import Papa from 'papaparse'
 interface Props {
   onSubmit: (domain: string, keywords: string[], mode: 'keywords' | 'discovery' | 'deepdive') => void
   onBulkCsvSubmit: (domain: string, keywords: string[], originalRows: string[][], originalHeaders: string[]) => void
+  onMatomoMode: () => void
   isRunning: boolean
 }
 
-export default function AnalysisForm({ onSubmit, onBulkCsvSubmit, isRunning }: Props) {
-  const [mode, setMode] = useState<'keywords' | 'discovery' | 'deepdive' | 'bulkcsv'>('keywords')
+export default function AnalysisForm({ onSubmit, onBulkCsvSubmit, onMatomoMode, isRunning }: Props) {
+  const [mode, setMode] = useState<'keywords' | 'discovery' | 'deepdive' | 'bulkcsv' | 'matomo'>('keywords')
   const [csvHeaders, setCsvHeaders] = useState<string[]>([])
   const [csvRows, setCsvRows] = useState<string[][]>([])
   const [selectedColumn, setSelectedColumn] = useState<string>('')
@@ -82,11 +83,15 @@ export default function AnalysisForm({ onSubmit, onBulkCsvSubmit, isRunning }: P
           { key: 'discovery' as const, label: 'Discovery' },
           { key: 'deepdive' as const, label: 'Deep Dive' },
           { key: 'bulkcsv' as const, label: 'Bulk CSV' },
+          { key: 'matomo' as const, label: 'AI Crawls' },
         ]).map((m) => (
           <button
             key={m.key}
             type="button"
-            onClick={() => setMode(m.key)}
+            onClick={() => {
+              setMode(m.key)
+              if (m.key === 'matomo') onMatomoMode()
+            }}
             className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               mode === m.key
                 ? 'bg-lime-500 text-black'
@@ -98,7 +103,13 @@ export default function AnalysisForm({ onSubmit, onBulkCsvSubmit, isRunning }: P
         ))}
       </div>
 
-      {mode !== 'deepdive' && (
+      {mode === 'matomo' && (
+        <p className="text-xs text-gray-500">
+          Pulls pages crawled by AI chatbots from Matomo analytics, extracts keywords, and analyzes your visibility. Use the panel below.
+        </p>
+      )}
+
+      {mode !== 'deepdive' && mode !== 'matomo' && (
         <div>
           <label htmlFor="domain" className="block text-sm font-medium text-gray-300 mb-1">
             Domain
@@ -223,6 +234,7 @@ export default function AnalysisForm({ onSubmit, onBulkCsvSubmit, isRunning }: P
       <button
         type="submit"
         disabled={isRunning || (mode === 'bulkcsv' && csvRows.length === 0)}
+        hidden={mode === 'matomo'}
         className="w-full py-3 px-4 bg-lime-500 hover:bg-lime-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-black font-semibold rounded-lg transition-colors"
       >
         {isRunning

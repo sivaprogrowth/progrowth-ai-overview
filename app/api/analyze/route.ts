@@ -6,6 +6,7 @@ import {
   filterDiscoveredKeywords,
   extractCorePhrases,
   LLM_MODELS,
+  checkDailyCap,
 } from '@/lib/dataforseo'
 import {
   parseMentionSearch,
@@ -71,6 +72,14 @@ export async function GET(req: NextRequest) {
       }
 
       try {
+        // Check daily spending cap
+        const cap = await checkDailyCap()
+        if (!cap.allowed) {
+          send('error', { message: `Daily API spending cap reached ($${cap.spent.toFixed(2)}/$${cap.cap.toFixed(2)}). Try again tomorrow.` })
+          controller.close()
+          return
+        }
+
         // ── Deep Dive mode: fetch full AI responses for a single query ──
         if (mode === 'deepdive') {
           const query = keywordsParam!.trim()
