@@ -41,7 +41,22 @@ interface Props {
   /** Cluster taxonomy for THIS client. Falls back to ProGrowth defaults via
    *  the parent if the client has no overrides configured. */
   clusters: ClusterMeta[]
+  /** Configured competitor domains — badged in the domain lists / tiers.
+   *  Read-side only, so it applies to existing snapshots too. */
+  competitorSites?: string[]
 }
+
+function makeCompetitorMatcher(sites: string[]): (domain: string) => boolean {
+  const norm = sites.map((s) => s.toLowerCase().replace(/^www\./, '')).filter(Boolean)
+  if (norm.length === 0) return () => false
+  return (domain: string) => {
+    const d = domain.toLowerCase().replace(/^www\./, '')
+    return norm.some((c) => d === c || d.endsWith(`.${c}`) || c.endsWith(`.${d}`))
+  }
+}
+
+const COMPETITOR_CHIP =
+  'ml-2 shrink-0 rounded border border-amber-500/40 bg-amber-500/15 text-amber-300 px-1.5 py-0.5 text-[10px]'
 
 const ENGINE_STYLE: Record<Engine, { label: string; chip: string }> = {
   chatgpt: { label: 'ChatGPT', chip: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
@@ -73,7 +88,8 @@ function formatDate(iso: string | null): string {
   })
 }
 
-export default function CitationNetworkView({ snapshot, client, clusters }: Props) {
+export default function CitationNetworkView({ snapshot, client, clusters, competitorSites }: Props) {
+  const isCompetitor = makeCompetitorMatcher(competitorSites ?? [])
   const [activeCluster, setActiveCluster] = useState<string>(
     snapshot?.clustersCovered[0] ?? clusters[0]?.id ?? ''
   )
@@ -195,15 +211,15 @@ export default function CitationNetworkView({ snapshot, client, clusters }: Prop
           win compounds across multiple AI surfaces.
         </p>
 
-        {tier1.length > 0 && <TierTable title='Tier 1 — 4-engine reach (target FIRST)' targets={tier1} />}
-        {tier2.length > 0 && <TierTable title='Tier 2 — 3-engine reach' targets={tier2} className='mt-6' />}
+        {tier1.length > 0 && <TierTable title='Tier 1 — 4-engine reach (target FIRST)' targets={tier1} isCompetitor={isCompetitor} />}
+        {tier2.length > 0 && <TierTable title='Tier 2 — 3-engine reach' targets={tier2} className='mt-6' isCompetitor={isCompetitor} />}
         {tier3.length > 0 && (
           <details className='mt-6 rounded-lg border border-gray-800 bg-gray-900 px-4 py-3'>
             <summary className='cursor-pointer text-sm font-medium text-gray-300 hover:text-white'>
               Tier 3 — 2-engine reach ({tier3.length} domains)
             </summary>
             <div className='mt-4'>
-              <TierTable title='' targets={tier3} compact />
+              <TierTable title='' targets={tier3} compact isCompetitor={isCompetitor} />
             </div>
           </details>
         )}
@@ -254,27 +270,31 @@ export default function CitationNetworkView({ snapshot, client, clusters }: Prop
                   {ranks.length === 0 && (
                     <li className='px-3 py-3 text-gray-500 italic'>No data</li>
                   )}
-                  {ranks.map((r, i) => (
+                  {ranks.map((r, i) => {
+                    const comp = !r.isClientBrand && isCompetitor(r.domain)
+                    return (
                     <li
                       key={r.domain}
                       className={`flex items-center justify-between px-3 py-1.5 border-b border-gray-800/40 last:border-0 ${
-                        r.isClientBrand ? 'bg-lime-500/10' : ''
+                        r.isClientBrand ? 'bg-lime-500/10' : comp ? 'bg-amber-500/10' : ''
                       }`}
                     >
                       <span className='flex items-center gap-2 min-w-0'>
                         <span className='text-gray-500 text-xs w-5 shrink-0'>{i + 1}.</span>
                         <span
                           className={`truncate ${
-                            r.isClientBrand ? 'text-lime-300 font-medium' : 'text-gray-300'
+                            r.isClientBrand ? 'text-lime-300 font-medium' : comp ? 'text-amber-300 font-medium' : 'text-gray-300'
                           }`}
                           title={r.domain}
                         >
                           {r.domain}
                         </span>
+                        {comp && <span className={COMPETITOR_CHIP}>competitor</span>}
                       </span>
                       <span className='text-xs text-gray-500 ml-2 shrink-0'>×{r.hits}</span>
                     </li>
-                  ))}
+                    )
+                  })}
                 </ol>
               </div>
             )
@@ -301,11 +321,13 @@ function TierTable({
   targets,
   className,
   compact,
+  isCompetitor,
 }: {
   title: string
   targets: CitationNetworkSnapshot['crossEngineTargets']
   className?: string
   compact?: boolean
+  isCompetitor?: (domain: string) => boolean
 }) {
   return (
     <div className={className}>
@@ -334,7 +356,12 @@ function TierTable({
           <tbody>
             {targets.map((t) => (
               <tr key={`${t.clusterId}|${t.domain}`} className='border-b border-gray-800/40 last:border-0'>
-                <td className='px-4 py-2 text-white font-medium'>{t.domain}</td>
+                <td className='px-4 py-2 font-medium'>
+                  <span className={isCompetitor?.(t.domain) ? 'text-amber-300' : 'text-white'}>
+                    {t.domain}
+                  </span>
+                  {isCompetitor?.(t.domain) && <span className={COMPETITOR_CHIP}>competitor</span>}
+                </td>
                 <td className='px-4 py-2 text-gray-400 text-xs'>{t.clusterName}</td>
                 <td className='px-4 py-2'>
                   <div className='flex gap-1 flex-wrap'>

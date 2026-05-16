@@ -1,23 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { revalidateTag } from 'next/cache'
 import { listActiveClients } from '@/lib/clients'
+import { toList, cleanDomain, toDomainList } from '@/lib/clientInput'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
-/** Split a textarea/comma list into a clean string[]. */
-function toList(v: unknown): string[] {
-  if (typeof v !== 'string') return []
-  return v
-    .split(/[\n,]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
-
-function cleanDomain(v: string): string {
-  return v.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase()
-}
 
 /**
  * GET /api/clients
@@ -90,6 +78,7 @@ export async function POST(req: NextRequest) {
     primary_domain,
     alt_domains: toList(body.alt_domains),
     brand_name_patterns: toList(body.brand_name_patterns),
+    competitor_sites: toDomainList(body.competitor_sites),
     brand_description: String(body.brand_description ?? '').trim(),
     // AI-generated set from /api/clients/generate-prompts when present;
     // otherwise empty → lib/clients falls back to CANONICAL_PROMPTS.

@@ -58,6 +58,7 @@ export default async function CitationNetworkPage() {
           snapshot={snapshot}
           client={{ slug: client.slug, company_name: client.company_name }}
           clusters={getClustersForClient(client).map((c) => ({ id: c.id, name: c.name }))}
+          competitorSites={client.competitor_sites}
         />
       </div>
     </div>

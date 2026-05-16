@@ -29,6 +29,10 @@ export interface Client {
   primary_domain: string
   alt_domains: string[]
   brand_name_patterns: string[]
+  /** Configured competitor domains — prioritised in transform competitor
+   *  slots, highlighted in citation-network, fed to the prompt generator.
+   *  Empty = competitors are purely auto-derived (any non-brand domain). */
+  competitor_sites: string[]
   brand_description: string
   /** Empty array = fall back to the default PROMPT_CLUSTERS in lib/prompts */
   verticals: PromptCluster[]
@@ -52,7 +56,7 @@ const CACHE_TTL_SECONDS = 300
 
 const SELECT_COLUMNS = `
   id, slug, company_name, primary_domain, alt_domains,
-  brand_name_patterns, brand_description, verticals, prompts,
+  brand_name_patterns, competitor_sites, brand_description, verticals, prompts,
   probe_queries, matomo_site_id, matomo_url, kpi_baselines,
   is_active, cron_enabled, notification_email,
   created_at, updated_at
@@ -70,6 +74,7 @@ function normaliseRow(row: any): Client {
     primary_domain: row.primary_domain,
     alt_domains: ensureType<string[]>(row.alt_domains, []),
     brand_name_patterns: ensureType<string[]>(row.brand_name_patterns, []),
+    competitor_sites: ensureType<string[]>(row.competitor_sites, []),
     brand_description: row.brand_description ?? '',
     verticals: ensureType<PromptCluster[]>(row.verticals, []),
     prompts: ensureType<CanonicalPrompt[]>(row.prompts, []),

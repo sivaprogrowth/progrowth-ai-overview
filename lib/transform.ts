@@ -55,9 +55,16 @@ export function transformToRows(
     chatgpt: Map<string, MentionKeywordResult>
     perplexity: Map<string, PlatformResult>
     claude: Map<string, PlatformResult>
-  }
+  },
+  /** Configured competitor domains — when cited they are prioritised
+   *  (in this order) into the competitor_1/2/3 slots ahead of the
+   *  generic any-non-brand fill. Empty = legacy auto-derived behaviour. */
+  competitorSites: string[] = []
 ): MentionRow[] {
   const domainLower = domain.toLowerCase().replace(/^www\./, '')
+  const configuredCompetitors = competitorSites
+    .map((c) => c.toLowerCase().replace(/^www\./, ''))
+    .filter(Boolean)
 
   return keywords.map((kw) => {
     const kwLower = kw.toLowerCase()
@@ -103,7 +110,25 @@ export function transformToRows(
       }
     }
 
-    const top3 = Array.from(allCompetitors.values()).slice(0, 3)
+    // Prioritise configured competitors (in configured order, only when
+    // actually cited) ahead of the generic non-brand fill.
+    const allComp = Array.from(allCompetitors.values())
+    const ordered = [
+      ...configuredCompetitors.flatMap((c) =>
+        allComp.filter((x) => isDomainMatch(x.domain, c))
+      ),
+      ...allComp.filter(
+        (x) => !configuredCompetitors.some((c) => isDomainMatch(x.domain, c))
+      ),
+    ]
+    const seenComp = new Set<string>()
+    const top3: CitedUrl[] = []
+    for (const x of ordered) {
+      if (seenComp.has(x.domain)) continue
+      seenComp.add(x.domain)
+      top3.push(x)
+      if (top3.length === 3) break
+    }
     const contentGap = platforms === 0 && top3.length > 0
 
     // Collect unique queries from Google and ChatGPT mentions, sorted by AI volume

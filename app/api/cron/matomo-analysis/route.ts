@@ -156,7 +156,7 @@ export async function GET(req: NextRequest) {
     chatgpt: chatgptMap,
     perplexity: new Map<string, PlatformResult>(),
     claude: new Map<string, PlatformResult>(),
-  })
+  }, client.competitor_sites)
 
   const summary = {
     domain,

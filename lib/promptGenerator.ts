@@ -26,6 +26,9 @@ export interface GeneratePromptsInput {
   description?: string
   /** Optional free-text hints (industries / service lines) to steer clusters. */
   verticalsHint?: string[]
+  /** Configured competitor domains — a few are woven in so the set
+   *  includes real "Company vs <competitor>" comparative prompts. */
+  competitorSites?: string[]
 }
 
 export interface GeneratedPromptSet {
@@ -71,23 +74,36 @@ function extractJson(text: string): any {
  * user_prompt > ~500 chars (40501), so the dynamic parts are budgeted and
  * truncated and the whole string is kept well under the limit.
  */
+// Fixed instruction tail — kept last and intact so the debunked-tactic
+// guardrail clause is never truncated by the 500-char clamp.
+const PROMPT_TAIL =
+  ` Output ONLY minified JSON, no fences: ` +
+  `{"clusters":[{"id":"slug","name":"N","description":"d"}],` +
+  `"prompts":[{"text":"q","type":"t","cluster":"slug"}]}. ` +
+  `Make 5 clusters and 25 real buyer-intent prompts (~5/cluster) for this ` +
+  `company's market. t = comparative|task|evaluative|ideation, counts ` +
+  `5/5/10/5. Real buyer questions only — never AEO/llms.txt/schema coaching.`
+
 function buildPrompt(input: GeneratePromptsInput): string {
-  const name = input.companyName.trim().slice(0, 50)
+  const name = input.companyName.trim().slice(0, 40)
   const domain = input.primaryDomain.trim().slice(0, 40)
   const hint = input.verticalsHint?.filter(Boolean).join(', ')
   const ctxFull = (input.description?.trim() || hint || '').replace(/\s+/g, ' ')
-  // Reserve room: the fixed scaffold below is ~360 chars; cap context so
-  // the joined prompt stays under the 500-char API limit.
-  const ctx = ctxFull ? ` — ${ctxFull}`.slice(0, 90) : ''
-  return (
-    `Company "${name}" (${domain})${ctx}. ` +
-    `Output ONLY minified JSON, no fences: ` +
-    `{"clusters":[{"id":"slug","name":"N","description":"d"}],` +
-    `"prompts":[{"text":"q","type":"t","cluster":"slug"}]}. ` +
-    `Make 5 clusters and 25 real buyer-intent prompts (~5/cluster) for this ` +
-    `company's market. t = comparative|task|evaluative|ideation, counts ` +
-    `5/5/10/5. Real buyer questions only — never AEO/llms.txt/schema coaching.`
-  ).slice(0, 500)
+  const comps = (input.competitorSites ?? [])
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(',')
+
+  // Variable head, hard-clamped so head + PROMPT_TAIL stays ≤ 500
+  // (DataForSEO rejects user_prompt > ~500 with a misleading 40501 —
+  // see lib/dataforseo.ts / memory dataforseo-chatgpt-user-prompt-500).
+  let head = `Company "${name}" (${domain})`
+  if (ctxFull) head += ` — ${ctxFull}`
+  if (comps) head += `. Competitors: ${comps}; include 2-3 "${name} vs <competitor>" comparative prompts`
+  head = head.slice(0, 500 - PROMPT_TAIL.length - 1) + '.'
+
+  return (head + PROMPT_TAIL).slice(0, 500)
 }
 
 /**

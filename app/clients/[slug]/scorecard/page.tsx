@@ -55,6 +55,12 @@ export default async function ClientScorecardPage({
               ← All clients
             </Link>
             <Link
+              href={`/clients/${client.slug}/edit`}
+              className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
+            >
+              Edit ICP
+            </Link>
+            <Link
               href="/citation-network"
               className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
             >

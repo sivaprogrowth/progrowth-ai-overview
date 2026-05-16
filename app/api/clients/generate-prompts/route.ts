@@ -31,6 +31,9 @@ export async function POST(req: NextRequest) {
       verticalsHint: Array.isArray(body.verticalsHint)
         ? body.verticalsHint.map(String)
         : undefined,
+      competitorSites: Array.isArray(body.competitorSites)
+        ? body.competitorSites.map(String)
+        : undefined,
     })
     return NextResponse.json(result)
   } catch (err) {
