@@ -7,6 +7,8 @@ import {
 } from '@/lib/geoSeoGap'
 import { sendScorecardDigest } from '@/lib/scorecardDigest'
 import { getClientFromRequest } from '@/lib/clientContext'
+import { fanOutToClients, shouldFanOut } from '@/lib/cronFanout'
+import type { Client } from '@/lib/clients'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -32,13 +34,25 @@ function isVercelCron(req: NextRequest): boolean {
  *   ?mode=auto          monthly on first Monday of month, weekly otherwise
  *   ?email=true         force-send the digest even outside a Vercel cron call
  *
+ * Multi-tenant fan-out: called WITHOUT ?client= (the scheduled Vercel
+ * cron), it fans out to every cron_enabled client — one self-fetch each
+ * with ?client=<slug> — keeping the Hobby 2-cron cap. ?email=true is
+ * forwarded so each client still gets its weekly digest on the cron run.
+ *
  * COST: ~$1.00 per invocation (5 queries) or ~$10 monthly (25). The
  * checkDailyCap() guard in lib/dataforseo.ts refuses if the daily cap
  * is exceeded.
  */
 export async function GET(req: NextRequest) {
+  if (shouldFanOut(req)) {
+    const extraParams = isVercelCron(req) ? { email: 'true' } : undefined
+    return fanOutToClients(req, '/api/cron/geo-seo-gap', { extraParams })
+  }
   const client = await getClientFromRequest(req)
+  return runForClient(client, req)
+}
 
+async function runForClient(client: Client, req: NextRequest): Promise<NextResponse> {
   const qsQueries = req.nextUrl.searchParams.get('queries')
   const modeParam = (req.nextUrl.searchParams.get('mode') as RunMode | null) ?? 'auto'
   const mode = resolveRunMode(modeParam)

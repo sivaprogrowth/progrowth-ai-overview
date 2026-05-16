@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { computeCitationNetwork, ALL_ENGINES, type Engine } from '@/lib/citationNetwork'
 import { getPromptsForClient } from '@/lib/prompts'
 import { getClientFromRequest } from '@/lib/clientContext'
+import { fanOutToClients, shouldFanOut } from '@/lib/cronFanout'
+import type { Client } from '@/lib/clients'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -23,11 +25,18 @@ export const maxDuration = 60
  *   ?clusters=fcmo,fsm       limit to specific clusters
  *
  * Path lives under /api/cron so middleware's Bearer-token allowlist
- * applies — but this is a manually-triggered one-shot, not a scheduled
- * cron. Outlet rankings don't change week-over-week.
+ * applies. Called WITHOUT ?client= it fans out to every cron_enabled
+ * client (one self-fetch each), preserving ?engines=/?clusters=.
  */
 export async function GET(req: NextRequest) {
+  if (shouldFanOut(req)) {
+    return fanOutToClients(req, '/api/cron/citation-network')
+  }
   const client = await getClientFromRequest(req)
+  return runForClient(client, req)
+}
+
+async function runForClient(client: Client, req: NextRequest): Promise<NextResponse> {
 
   const engineFilter = req.nextUrl.searchParams.get('engines')
   const clusterFilter = req.nextUrl.searchParams.get('clusters')
