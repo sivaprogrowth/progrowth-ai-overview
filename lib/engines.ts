@@ -9,6 +9,6 @@
  * with runtime side effects to this file.
  */
 
-export type Engine = 'chatgpt' | 'claude' | 'perplexity' | 'gemini'
+export type Engine = 'chatgpt' | 'claude' | 'perplexity' | 'gemini' | 'grok'
 
-export const ALL_ENGINES: Engine[] = ['chatgpt', 'claude', 'perplexity', 'gemini']
+export const ALL_ENGINES: Engine[] = ['chatgpt', 'claude', 'perplexity', 'gemini', 'grok']

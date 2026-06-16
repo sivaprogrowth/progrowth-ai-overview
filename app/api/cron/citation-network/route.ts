@@ -14,14 +14,16 @@ export const maxDuration = 60
  * GET /api/cron/citation-network
  *
  * Runs the per-engine citation network mapping for the resolved client
- * across their canonical prompts × 4 engines. Cost ~$7.25 per full run.
+ * across their canonical prompts × 5 engines (ChatGPT/Claude/Perplexity/
+ * Gemini via DataForSEO + Grok via the xAI API). Cost ~$7.25 (DataForSEO)
+ * + ~$0.75–$1.75 (Grok) per full run.
  *
  * Multi-tenant: resolves the client from ?client=<slug>, the client_slug
  * cookie, or falls back to the default ('progrowth') — see lib/clientContext.
  *
  * Query params:
  *   ?client=<slug>           pick which tenant to analyse
- *   ?engines=chatgpt,claude  limit to specific engines (cost control)
+ *   ?engines=chatgpt,grok    limit to specific engines (cost control)
  *   ?clusters=fcmo,fsm       limit to specific clusters
  *
  * Path lives under /api/cron so middleware's Bearer-token allowlist

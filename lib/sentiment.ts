@@ -76,6 +76,11 @@ interface RawEngineResponse {
 }
 
 async function fetchEngineResponse(engine: Engine, keyword: string): Promise<RawEngineResponse | null> {
+  // Grok (xAI) is intentionally NOT supported in the sentiment pipeline yet —
+  // it has no DataForSEO config below. Skip it gracefully so Grok citation
+  // appearances simply carry no sentiment classification.
+  if (engine === 'grok') return null
+
   const prompt = `What are the best services or providers for "${keyword}"? List 5-10 companies with their websites and a brief reason for each.`
 
   const config = {
@@ -97,7 +102,7 @@ async function fetchEngineResponse(engine: Engine, keyword: string): Promise<Raw
     },
   } as const
 
-  const cfg = config[engine]
+  const cfg = config[engine as Exclude<Engine, 'grok'>]
   try {
     const res = await fetch(`${DATAFORSEO_BASE}${cfg.path}`, {
       method: 'POST',

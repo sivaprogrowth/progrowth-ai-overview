@@ -2,8 +2,8 @@
  * Per-engine citation network mapping (Task 22 / multi-tenant Phase 1).
  *
  * Runs the active prompt set against ChatGPT + Claude + Perplexity +
- * Gemini, extracts cited domains per (cluster × engine) cell, and ranks
- * the top 15 domains per cell by frequency.
+ * Gemini + Grok, extracts cited domains per (cluster × engine) cell, and
+ * ranks the top 15 domains per cell by frequency.
  *
  * Used to drive earned-media outreach targeting (Task 18) and YouTube
  * placement strategy (Task 23). Each engine has materially different
@@ -17,7 +17,8 @@
  * "progrowth" wording so historical Supabase rows continue to deserialise
  * (see citationNetworkFetcher.ts back-compat read).
  *
- * Cost per full run: ~$7.25 across all 25 prompts × 4 engines.
+ * Cost per full run: ~$7.25 across all 25 prompts × 4 DataForSEO engines,
+ * plus ~$0.75–$1.75 for Grok (xAI Web Search tool + grok-4.3 tokens).
  * Designed as a one-shot endpoint (not a cron) — outlet rankings don't
  * change week-over-week. Re-run quarterly or when strategy shifts.
  */
@@ -34,6 +35,18 @@ function getAuth(): string {
   const password = process.env.DATAFORSEO_PASSWORD
   if (!login || !password) throw new Error('DataForSEO credentials not configured')
   return Buffer.from(`${login}:${password}`).toString('base64')
+}
+
+// Grok (xAI) is NOT available through DataForSEO — it's fetched directly from
+// the xAI Responses API with the server-side web_search tool, which returns a
+// `citations[]` array of source URLs. Separate base URL + Bearer auth.
+const XAI_BASE = 'https://api.x.ai/v1'
+const GROK_MODEL = 'grok-4.3'
+
+function getXaiAuth(): string {
+  const key = process.env.XAI_API_KEY
+  if (!key) throw new Error('xAI API key not configured')
+  return key
 }
 
 function extractDomain(input: string | undefined | null): string | null {
@@ -54,11 +67,36 @@ export { type Engine, ALL_ENGINES }
 
 // ── Per-engine cited-domain fetchers ──────────────────────────────────────
 
+// Grok via the xAI Responses API. The web_search tool runs server-side and
+// the response carries a `citations[]` array of source URLs Grok used. Parsed
+// defensively in parseCitations('grok', …) — see that branch.
+async function fetchGrokCitations(prompt: string): Promise<string[]> {
+  try {
+    const res = await fetch(`${XAI_BASE}/responses`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getXaiAuth()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: GROK_MODEL,
+        input: [{ role: 'user', content: prompt }],
+        tools: [{ type: 'web_search' }],
+      }),
+    })
+    if (!res.ok) return []
+    const data = (await res.json()) as any
+    return parseCitations('grok', data)
+  } catch {
+    return []
+  }
+}
+
 async function fetchEngineCitations(
   engine: Engine,
   keyword: string
 ): Promise<string[]> {
   const prompt = `What are the best services or providers for "${keyword}"? List 5-10 companies with their websites and a brief reason for each.`
+
+  // Grok is fetched from xAI directly, not DataForSEO.
+  if (engine === 'grok') return fetchGrokCitations(prompt)
 
   const config = {
     chatgpt: {
@@ -79,7 +117,8 @@ async function fetchEngineCitations(
     },
   } as const
 
-  const cfg = config[engine]
+  // grok is handled above; the rest are DataForSEO-backed engines.
+  const cfg = config[engine as Exclude<Engine, 'grok'>]
   try {
     const res = await fetch(`${DATAFORSEO_BASE}${cfg.path}`, {
       method: 'POST',
@@ -95,6 +134,37 @@ async function fetchEngineCitations(
 }
 
 function parseCitations(engine: Engine, data: any): string[] {
+  // Grok (xAI Responses API). The response is an `output[]` array of items.
+  // We treat as "cited" the domains Grok actually surfaces in its answer:
+  //   • `url_citation` annotations on the assistant message (evidence links), and
+  //   • URLs embedded in the answer text (the recommended-provider websites Grok
+  //     lists inline, e.g. "Website: https://…").
+  // We deliberately SKIP the `web_search_call.action.sources[]` (raw search
+  // results it merely browsed) to match the other engines, which extract cited
+  // references rather than the underlying search index. Defensive fallbacks read
+  // a top-level `citations[]`/`sources[]` in case the API shape drifts.
+  if (engine === 'grok') {
+    const grokDomains = new Set<string>()
+    const addUrl = (u: unknown) => {
+      const d = extractDomain(typeof u === 'string' ? u : (u as any)?.url)
+      if (d) grokDomains.add(d)
+    }
+    const urlRe = /https?:\/\/[^\s)\]}"'<>]+/g
+    for (const item of (Array.isArray(data?.output) ? data.output : [])) {
+      for (const c of (item?.content ?? [])) {
+        for (const ann of (c?.annotations ?? [])) {
+          if (ann?.type === 'url_citation') addUrl(ann.url)
+        }
+        if (typeof c?.text === 'string') {
+          for (const m of c.text.match(urlRe) ?? []) addUrl(m)
+        }
+      }
+    }
+    for (const c of (Array.isArray(data?.citations) ? data.citations : [])) addUrl(c)
+    for (const s of (Array.isArray(data?.sources) ? data.sources : [])) addUrl(s)
+    return Array.from(grokDomains)
+  }
+
   const items = data?.tasks?.[0]?.result?.[0]?.items ?? []
   const domains = new Set<string>()
 

@@ -63,12 +63,14 @@ const ENGINE_STYLE: Record<Engine, { label: string; chip: string }> = {
   claude: { label: 'Claude', chip: 'bg-orange-500/20 text-orange-300 border-orange-500/40' },
   perplexity: { label: 'Perplexity', chip: 'bg-sky-500/20 text-sky-300 border-sky-500/40' },
   gemini: { label: 'Gemini', chip: 'bg-purple-500/20 text-purple-300 border-purple-500/40' },
+  grok: { label: 'Grok', chip: 'bg-slate-400/20 text-slate-200 border-slate-400/40' },
 }
 
 function tierLabel(count: number): { label: string; color: string } {
-  if (count === 4) return { label: 'Tier 1 · 4-engine', color: 'text-lime-300 bg-lime-500/15 border-lime-500/40' }
-  if (count === 3) return { label: 'Tier 2 · 3-engine', color: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/40' }
-  return { label: 'Tier 3 · 2-engine', color: 'text-amber-300 bg-amber-500/15 border-amber-500/40' }
+  if (count >= 5) return { label: 'Tier 1 · 5-engine', color: 'text-lime-300 bg-lime-500/15 border-lime-500/40' }
+  if (count === 4) return { label: 'Tier 2 · 4-engine', color: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/40' }
+  if (count === 3) return { label: 'Tier 3 · 3-engine', color: 'text-sky-300 bg-sky-500/15 border-sky-500/40' }
+  return { label: 'Tier 4 · 2-engine', color: 'text-amber-300 bg-amber-500/15 border-amber-500/40' }
 }
 
 function formatDate(iso: string | null): string {
@@ -110,9 +112,10 @@ export default function CitationNetworkView({ snapshot, client, clusters, compet
     )
   }
 
-  const tier1 = snapshot.crossEngineTargets.filter((t) => t.engineCount === 4)
-  const tier2 = snapshot.crossEngineTargets.filter((t) => t.engineCount === 3)
-  const tier3 = snapshot.crossEngineTargets.filter((t) => t.engineCount === 2)
+  const tier1 = snapshot.crossEngineTargets.filter((t) => t.engineCount >= 5)
+  const tier2 = snapshot.crossEngineTargets.filter((t) => t.engineCount === 4)
+  const tier3 = snapshot.crossEngineTargets.filter((t) => t.engineCount === 3)
+  const tier4 = snapshot.crossEngineTargets.filter((t) => t.engineCount === 2)
 
   const activeCells = snapshot.perCell[activeCluster] ?? {}
   const clusterName =
@@ -123,7 +126,7 @@ export default function CitationNetworkView({ snapshot, client, clusters, compet
       <div className='grid grid-cols-1 sm:grid-cols-4 gap-3'>
         <Stat label='Last run' value={formatDate(snapshot.generatedAt)} />
         <Stat label='Clusters covered' value={`${snapshot.clustersCovered.length} / ${clusters.length}`} />
-        <Stat label='Prompts × engines' value={`${snapshot.promptsRun * snapshot.clustersCovered.length} · 4`} />
+        <Stat label='Prompts × engines' value={`${snapshot.promptsRun * snapshot.clustersCovered.length} · ${ALL_ENGINES.length}`} />
         <Stat
           label={`${client.company_name} citations`}
           value={String(snapshot.brandAppearances.length)}
@@ -211,15 +214,16 @@ export default function CitationNetworkView({ snapshot, client, clusters, compet
           win compounds across multiple AI surfaces.
         </p>
 
-        {tier1.length > 0 && <TierTable title='Tier 1 — 4-engine reach (target FIRST)' targets={tier1} isCompetitor={isCompetitor} />}
-        {tier2.length > 0 && <TierTable title='Tier 2 — 3-engine reach' targets={tier2} className='mt-6' isCompetitor={isCompetitor} />}
-        {tier3.length > 0 && (
+        {tier1.length > 0 && <TierTable title='Tier 1 — 5-engine reach (target FIRST)' targets={tier1} isCompetitor={isCompetitor} />}
+        {tier2.length > 0 && <TierTable title='Tier 2 — 4-engine reach' targets={tier2} className='mt-6' isCompetitor={isCompetitor} />}
+        {tier3.length > 0 && <TierTable title='Tier 3 — 3-engine reach' targets={tier3} className='mt-6' isCompetitor={isCompetitor} />}
+        {tier4.length > 0 && (
           <details className='mt-6 rounded-lg border border-gray-800 bg-gray-900 px-4 py-3'>
             <summary className='cursor-pointer text-sm font-medium text-gray-300 hover:text-white'>
-              Tier 3 — 2-engine reach ({tier3.length} domains)
+              Tier 4 — 2-engine reach ({tier4.length} domains)
             </summary>
             <div className='mt-4'>
-              <TierTable title='' targets={tier3} compact isCompetitor={isCompetitor} />
+              <TierTable title='' targets={tier4} compact isCompetitor={isCompetitor} />
             </div>
           </details>
         )}
@@ -257,7 +261,7 @@ export default function CitationNetworkView({ snapshot, client, clusters, compet
           {clusterName} · top 15 domains per engine, ranked by hit count across the 5 prompts in this cluster
         </p>
 
-        <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4'>
+        <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4'>
           {ALL_ENGINES.map((engine) => {
             const ranks = activeCells[engine] ?? []
             return (
