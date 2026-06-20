@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import KPIScorecard from '@/components/KPIScorecard'
+import RunAnalysisButton from '@/components/RunAnalysisButton'
 import { fetchKPIScorecard, fetchAiReadinessFromSnapshot } from '@/lib/scorecard'
 import { buildRecommendations, type Recommendation } from '@/lib/recommendations'
 import { getClientFromSlug } from '@/lib/clientContext'
@@ -67,6 +68,15 @@ export default async function ClientScorecardPage({
               Citation Network
             </Link>
           </div>
+        </div>
+
+        <div className="mb-6">
+          <RunAnalysisButton
+            clientSlug={client.slug}
+            job="citation-network"
+            label="Run Citation Network"
+            estimate="~1 min · ~$8"
+          />
         </div>
 
         <KPIScorecard

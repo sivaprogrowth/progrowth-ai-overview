@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { ALL_ENGINES, type Engine } from '@/lib/engines'
 import type { CitationNetworkSnapshot, MentionType } from '@/lib/citationNetworkFetcher'
+import RunAnalysisButton from './RunAnalysisButton'
 
 const SENTIMENT_STYLE: Record<MentionType, { label: string; chip: string; description: string }> = {
   recommended: {
@@ -99,15 +100,29 @@ export default function CitationNetworkView({ snapshot, client, clusters, compet
   if (!snapshot) {
     return (
       <div className='rounded-lg border border-gray-800 bg-gray-900 p-8 text-center'>
-        <p className='text-gray-400'>
-          No citation network snapshot for <span className='text-white'>{client.company_name}</span> yet.
+        <p className='text-gray-200 font-medium'>
+          No analysis has run for <span className='text-white'>{client.company_name}</span> yet.
         </p>
-        <p className='text-gray-500 mt-2 text-sm'>
-          Trigger one via{' '}
-          <code className='text-lime-400'>
+        <p className='text-gray-500 mt-2 text-sm max-w-xl mx-auto'>
+          A new client starts empty. Run the first analysis to map which domains
+          each AI engine cites across this client&apos;s prompt clusters.
+        </p>
+        <div className='mt-5 flex justify-center'>
+          <RunAnalysisButton
+            clientSlug={client.slug}
+            job='citation-network'
+            label='Generate snapshot now'
+            estimate='~1 min · ~$8'
+          />
+        </div>
+        <details className='mt-6 text-left max-w-xl mx-auto'>
+          <summary className='cursor-pointer text-xs text-gray-500 hover:text-gray-300'>
+            Advanced: trigger via API
+          </summary>
+          <code className='mt-2 block text-xs text-lime-400/90 break-all'>
             curl -H &apos;Authorization: Bearer $BATCH_API_KEY&apos; $HOST/api/cron/citation-network?client={client.slug}
           </code>
-        </p>
+        </details>
       </div>
     )
   }
