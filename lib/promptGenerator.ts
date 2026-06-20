@@ -199,9 +199,15 @@ export async function generateClientPrompts(
     }
 
     const type: PromptType = VALID_TYPES.includes(p?.type) ? p.type : 'evaluative'
-    const cluster = clusterIdList.includes(String(p?.cluster))
-      ? String(p.cluster)
-      : fallbackCluster
+    // Slugify the prompt's cluster ref the SAME way the cluster ids were
+    // (see the cluster loop above). The LLM often references a cluster by its
+    // display name or a near-slug ("Market Analysis", "market_analysis")
+    // rather than the exact slug — without normalising here, every such
+    // prompt fails the includes() check and collapses into fallbackCluster
+    // (the first cluster), leaving the other clusters empty and 504-ing the
+    // per-cluster citation-network run on the overloaded one.
+    const slugCluster = slugify(String(p?.cluster ?? ''))
+    const cluster = clusterIdList.includes(slugCluster) ? slugCluster : fallbackCluster
     const n = (perTypeCount[`${cluster}-${type}`] = (perTypeCount[`${cluster}-${type}`] ?? 0) + 1)
     prompts.push({
       id: `${cluster}-${TYPE_LETTER[type]}${n}`,
