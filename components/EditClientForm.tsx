@@ -121,7 +121,11 @@ export default function EditClientForm({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function handleGenerate() {
+  // `full: true` lets the AI invent fresh clusters AND prompts (overwrites
+  // your cluster names). Default keeps your existing clusters and only
+  // regenerates the prompts into them — so hand-edited cluster names survive.
+  async function handleGenerate(opts?: { full?: boolean }) {
+    const keepClusters = !opts?.full && clusters.length > 0
     setGenError(null)
     setGenerating(true)
     try {
@@ -138,6 +142,7 @@ export default function EditClientForm({
           samplePrompts: lines(samplePrompts),
           icpDescription,
           competitorSites: lines(competitorText),
+          fixedClusters: keepClusters ? clusters : undefined,
         }),
       })
       const data = await res.json()
@@ -369,17 +374,42 @@ export default function EditClientForm({
             </div>
             <p className="text-xs text-gray-500">
               Edit any prompt, change its type/cluster, add or remove rows.
-              Regenerate to replace the whole set from the ICP fields above.
+              {clusters.length > 0
+                ? ' Regenerate keeps your clusters above and only rewrites the prompts into them.'
+                : ' Generate to create clusters and prompts from the ICP fields above.'}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={generating}
-            className="shrink-0 text-xs px-3 py-2 rounded-md border border-lime-700/50 bg-lime-500/10 text-lime-300 hover:bg-lime-500/20 disabled:opacity-50"
-          >
-            {generating ? 'Generating…' : '✨ Generate prompts'}
-          </button>
+          <div className="shrink-0 flex flex-col items-end gap-1">
+            <button
+              type="button"
+              onClick={() => handleGenerate()}
+              disabled={generating}
+              className="text-xs px-3 py-2 rounded-md border border-lime-700/50 bg-lime-500/10 text-lime-300 hover:bg-lime-500/20 disabled:opacity-50"
+            >
+              {generating
+                ? 'Generating…'
+                : clusters.length > 0
+                  ? '✨ Regenerate prompts'
+                  : '✨ Generate prompts'}
+            </button>
+            {clusters.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      'Let the AI invent fresh clusters AND prompts? This OVERWRITES your cluster names above.'
+                    )
+                  )
+                    handleGenerate({ full: true })
+                }}
+                disabled={generating}
+                className="text-[11px] text-gray-500 hover:text-gray-300 underline-offset-2 hover:underline disabled:opacity-50"
+              >
+                Regenerate clusters too
+              </button>
+            )}
+          </div>
         </div>
         {genError && <div className="text-xs text-red-300">{genError}</div>}
         {genMeta && (

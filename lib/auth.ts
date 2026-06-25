@@ -23,7 +23,7 @@ export function createSessionToken(email: string, sessionId: string): string {
   const payload = {
     email,
     sessionId,
-    exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60, // 24 hours
+    exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60, // 30 days
   }
   const data = Buffer.from(JSON.stringify(payload)).toString('base64url')
   const sig = crypto

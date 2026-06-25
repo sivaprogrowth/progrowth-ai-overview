@@ -35,6 +35,10 @@ export interface GeneratePromptsInput {
   samplePrompts?: string[]
   /** Ideal-customer-profile / buyer designations description. */
   icpDescription?: string
+  /** When set, the LLM does NOT invent clusters — it generates prompts and
+   *  assigns them to ONLY these exact clusters, which are returned unchanged.
+   *  Lets a user lock the cluster names they want and just (re)fill prompts. */
+  fixedClusters?: PromptCluster[]
 }
 
 export interface GeneratedPromptSet {
@@ -90,6 +94,21 @@ const PROMPT_TAIL =
   `company's market. t = comparative|task|evaluative|ideation, counts ` +
   `5/5/10/5. Real buyer questions only — never AEO/llms.txt/schema coaching.`
 
+// Fixed-cluster variant of the tail: the LLM only emits prompts, assigned to
+// the caller's exact cluster ids (interpolated). Shorter than PROMPT_TAIL
+// because it doesn't describe the cluster shape — freeing head budget for the
+// id list, which must survive the 500-char clamp.
+function fixedClusterTail(clusterIds: string[]): string {
+  return (
+    ` Output ONLY minified JSON, no fences: ` +
+    `{"prompts":[{"text":"q","type":"t","cluster":"id"}]}. ` +
+    `Make 25 real buyer-intent prompts (~5 each) assigned to ONLY these ` +
+    `cluster ids: ${clusterIds.join(',')}. t = comparative|task|evaluative|` +
+    `ideation, counts 5/5/10/5. Real buyer questions only — never AEO/` +
+    `llms.txt/schema coaching.`
+  )
+}
+
 function buildPrompt(input: GeneratePromptsInput): string {
   const clean = (s: string) => s.replace(/\s+/g, ' ').trim()
   const name = clean(input.companyName).slice(0, 40)
@@ -104,6 +123,18 @@ function buildPrompt(input: GeneratePromptsInput): string {
     .filter(Boolean)
     .slice(0, 3)
     .join(',')
+
+  // Fixed-cluster mode: lock the caller's clusters, only generate prompts.
+  if (input.fixedClusters && input.fixedClusters.length > 0) {
+    const tail = fixedClusterTail(input.fixedClusters.map((c) => c.id))
+    const seg: string[] = [`Company "${name}" (${domain})`]
+    if (desc) seg.push(`— ${desc.slice(0, 60)}`)
+    if (icp) seg.push(`ICP:${icp.slice(0, 40)}`)
+    if (prods) seg.push(`Products:${prods.slice(0, 30)}`)
+    if (comps) seg.push(`Competitors:${comps.slice(0, 30)}; add "${name} vs <competitor>" prompts`)
+    const head = seg.join('. ').slice(0, 500 - tail.length - 1) + '.'
+    return (head + tail).slice(0, 500)
+  }
 
   // Priority-ordered, per-segment-capped head. The whole head is then
   // hard-clamped so head + PROMPT_TAIL stays ≤ 500 (DataForSEO rejects
@@ -159,7 +190,14 @@ export async function generateClientPrompts(
   if (!parsed) {
     throw new Error(`Generator failed after retries: ${lastErr}`)
   }
-  const rawClusters: any[] = Array.isArray(parsed?.clusters) ? parsed.clusters : []
+  // In fixed-cluster mode the LLM only returns prompts; the clusters come
+  // verbatim from the caller (slugified/deduped to match the prompt remap).
+  const rawClusters: any[] =
+    input.fixedClusters && input.fixedClusters.length > 0
+      ? input.fixedClusters
+      : Array.isArray(parsed?.clusters)
+        ? parsed.clusters
+        : []
   const rawPrompts: any[] = Array.isArray(parsed?.prompts) ? parsed.prompts : []
 
   // ── Clusters: slugify ids, dedupe, require name ──

@@ -39,6 +39,16 @@ export async function POST(req: NextRequest) {
         ? body.samplePrompts.map(String)
         : undefined,
       icpDescription: body.icpDescription ? String(body.icpDescription) : undefined,
+      fixedClusters: Array.isArray(body.fixedClusters)
+        ? (body.fixedClusters as Array<Record<string, unknown>>)
+            .filter((c) => c && typeof c === 'object')
+            .map((c) => ({
+              id: String(c.id ?? ''),
+              name: String(c.name ?? ''),
+              description: String(c.description ?? ''),
+            }))
+            .filter((c) => c.id && c.name)
+        : undefined,
     })
     return NextResponse.json(result)
   } catch (err) {
