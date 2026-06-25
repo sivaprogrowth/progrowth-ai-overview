@@ -33,6 +33,22 @@ interface ClusterMeta {
   name: string
 }
 
+type PromptType = 'comparative' | 'task' | 'evaluative' | 'ideation'
+
+interface PromptMeta {
+  id: string
+  text: string
+  type: PromptType
+  cluster: string
+}
+
+const PROMPT_TYPE_STYLE: Record<PromptType, { label: string; chip: string }> = {
+  comparative: { label: 'Comparative', chip: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40' },
+  task: { label: 'Task', chip: 'bg-sky-500/20 text-sky-300 border-sky-500/40' },
+  evaluative: { label: 'Evaluative', chip: 'bg-lime-500/20 text-lime-300 border-lime-500/40' },
+  ideation: { label: 'Ideation', chip: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40' },
+}
+
 interface Props {
   snapshot: CitationNetworkSnapshot | null
   /** Lightweight client meta — used for labels and the curl example shown in
@@ -42,6 +58,10 @@ interface Props {
   /** Cluster taxonomy for THIS client. Falls back to ProGrowth defaults via
    *  the parent if the client has no overrides configured. */
   clusters: ClusterMeta[]
+  /** The actual prompts ("queries") fired at every engine for THIS client.
+   *  Shown independently of citations so the tracked queries are always
+   *  visible — even when the client has 0 brand citations. */
+  prompts: PromptMeta[]
   /** Configured competitor domains — badged in the domain lists / tiers.
    *  Read-side only, so it applies to existing snapshots too. */
   competitorSites?: string[]
@@ -91,7 +111,7 @@ function formatDate(iso: string | null): string {
   })
 }
 
-export default function CitationNetworkView({ snapshot, client, clusters, competitorSites }: Props) {
+export default function CitationNetworkView({ snapshot, client, clusters, prompts, competitorSites }: Props) {
   const isCompetitor = makeCompetitorMatcher(competitorSites ?? [])
   const [activeCluster, setActiveCluster] = useState<string>(
     snapshot?.clustersCovered[0] ?? clusters[0]?.id ?? ''
@@ -148,6 +168,8 @@ export default function CitationNetworkView({ snapshot, client, clusters, compet
           highlight={snapshot.brandAppearances.length > 0}
         />
       </div>
+
+      <QueriesTracked prompts={prompts} clusters={clusters} />
 
       {snapshot.brandAppearances.length > 0 && (
         <section>
@@ -321,6 +343,62 @@ export default function CitationNetworkView({ snapshot, client, clusters, compet
         </div>
       </section>
     </div>
+  )
+}
+
+function QueriesTracked({ prompts, clusters }: { prompts: PromptMeta[]; clusters: ClusterMeta[] }) {
+  if (prompts.length === 0) return null
+
+  // Preserve cluster ordering from the taxonomy; append any cluster ids that
+  // appear on prompts but aren't in the taxonomy (defensive against drift).
+  const clusterOrder = clusters.map((c) => c.id)
+  const clusterName = (id: string) => clusters.find((c) => c.id === id)?.name ?? id
+  const byCluster = new Map<string, PromptMeta[]>()
+  for (const p of prompts) {
+    if (!byCluster.has(p.cluster)) byCluster.set(p.cluster, [])
+    byCluster.get(p.cluster)!.push(p)
+  }
+  const orderedClusterIds = [
+    ...clusterOrder.filter((id) => byCluster.has(id)),
+    ...[...byCluster.keys()].filter((id) => !clusterOrder.includes(id)),
+  ]
+
+  return (
+    <section>
+      <h2 className='text-lg font-semibold text-white mb-1'>Queries tracked</h2>
+      <p className='text-sm text-gray-500 mb-4'>
+        The {prompts.length} prompts fired at every engine, grouped by cluster. These run regardless of
+        whether the brand gets cited — so you can see exactly what&apos;s being asked.
+      </p>
+      <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+        {orderedClusterIds.map((cid) => {
+          const items = byCluster.get(cid) ?? []
+          return (
+            <div key={cid} className='rounded-lg border border-gray-800 bg-gray-900'>
+              <div className='px-3 py-2 border-b border-gray-800 flex items-center justify-between'>
+                <span className='font-medium text-gray-200 text-sm'>{clusterName(cid)}</span>
+                <span className='text-xs text-gray-500'>{items.length} queries</span>
+              </div>
+              <ul className='text-sm'>
+                {items.map((p) => (
+                  <li
+                    key={p.id}
+                    className='flex items-start gap-2 px-3 py-2 border-b border-gray-800/40 last:border-0'
+                  >
+                    <span
+                      className={`mt-0.5 shrink-0 inline-block rounded border px-1.5 py-0.5 text-[10px] ${PROMPT_TYPE_STYLE[p.type].chip}`}
+                    >
+                      {PROMPT_TYPE_STYLE[p.type].label}
+                    </span>
+                    <span className='text-gray-300 italic leading-snug'>&ldquo;{p.text}&rdquo;</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 

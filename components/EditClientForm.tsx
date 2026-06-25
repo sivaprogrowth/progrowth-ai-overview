@@ -94,13 +94,26 @@ export default function EditClientForm({
   const [rows, setRows] = useState<Row[]>(
     initialPrompts.map((p) => ({ text: p.text, type: p.type, cluster: p.cluster }))
   )
-  const initialSnapshot = JSON.stringify({
-    c: initialClusters,
-    p: initialPrompts.map((p) => ({ t: p.text, y: p.type, c: p.cluster })),
-  })
-  const changed =
-    JSON.stringify({ c: clusters, p: rows.map((r) => ({ t: r.text, y: r.type, c: r.cluster })) }) !==
-    initialSnapshot
+  // What actually invalidates stored snapshots, keyed by (clusterId, promptId):
+  //   • a cluster id is ADDED or REMOVED   → snapshot slices orphan
+  //   • a prompt's text / type / cluster changes (or rows added/removed)
+  // Renaming a cluster's NAME or DESCRIPTION while keeping its id is purely
+  // cosmetic — the existing snapshot keeps rendering under the new label, so
+  // it must NOT trip the re-baseline warning.
+  const clusterIdSig = (cs: PromptCluster[]) => cs.map((c) => c.id).sort().join('|')
+  const promptSig = (ps: { text: string; type: PromptType; cluster: string }[]) =>
+    JSON.stringify(ps.map((p) => ({ t: p.text, y: p.type, c: p.cluster })))
+
+  const initialClusterIdSig = clusterIdSig(initialClusters)
+  const initialPromptSig = promptSig(initialPrompts)
+
+  const idsChanged = clusterIdSig(clusters) !== initialClusterIdSig
+  const promptsChanged = promptSig(rows) !== initialPromptSig
+  const needsRebaseline = idsChanged || promptsChanged
+
+  const clusterMetaChanged =
+    JSON.stringify(clusters.map((c) => ({ id: c.id, n: c.name, d: c.description }))) !==
+    JSON.stringify(initialClusters.map((c) => ({ id: c.id, n: c.name, d: c.description })))
 
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
@@ -155,11 +168,47 @@ export default function EditClientForm({
     ])
   }
 
+  // ── cluster editing ──
+  // The `id` is the join key to prompts + stored snapshots, so it's never
+  // user-editable: editing name/description in place keeps the id stable
+  // (cosmetic, no re-baseline). New clusters get a fresh synthetic id.
+  function updateCluster(i: number, patch: Partial<PromptCluster>) {
+    setClusters((cs) => cs.map((c, idx) => (idx === i ? { ...c, ...patch } : c)))
+  }
+  function addCluster() {
+    setClusters((cs) => {
+      const taken = new Set(cs.map((c) => c.id))
+      let n = cs.length + 1
+      let id = `custom-${n}`
+      while (taken.has(id)) id = `custom-${++n}`
+      return [...cs, { id, name: '', description: '' }]
+    })
+  }
+  function removeCluster(i: number) {
+    setClusters((cs) => cs.filter((_, idx) => idx !== i))
+  }
+  // Prompts pinned to a cluster block its removal until they're reassigned —
+  // keeps the save-time "every prompt needs a valid cluster" invariant safe.
+  const promptCountByCluster = rows.reduce<Record<string, number>>((acc, r) => {
+    acc[r.cluster] = (acc[r.cluster] ?? 0) + 1
+    return acc
+  }, {})
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
 
-    const clusterIds = new Set(clusters.map((c) => c.id))
+    const trimmedClusters = clusters.map((c) => ({
+      ...c,
+      name: c.name.trim(),
+      description: (c.description ?? '').trim(),
+    }))
+    if (trimmedClusters.some((c) => !c.name)) {
+      setError('Every cluster needs a name.')
+      return
+    }
+
+    const clusterIds = new Set(trimmedClusters.map((c) => c.id))
     const cleaned = rows
       .map((r) => ({ ...r, text: r.text.trim() }))
       .filter((r) => r.text.length > 0)
@@ -190,7 +239,7 @@ export default function EditClientForm({
             samplePrompts: lines(samplePrompts),
             icpDescription,
           },
-          verticals: clusters,
+          verticals: trimmedClusters,
           prompts: finalPrompts,
         }),
       })
@@ -247,6 +296,70 @@ export default function EditClientForm({
         onChange={setCompetitorText}
         placeholder={'marketri.com\nkalungi.com'}
       />
+
+      <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-4 space-y-3">
+        <div>
+          <div className="text-sm font-medium text-gray-200">
+            Clusters <span className="text-gray-500">({clusters.length})</span>
+          </div>
+          <p className="text-xs text-gray-500">
+            The topical buckets every prompt rolls up to. Rename these so they
+            represent the business — renaming is cosmetic and keeps existing
+            snapshots intact. Adding or removing a cluster re-baselines the data.
+          </p>
+        </div>
+
+        {clusters.length === 0 ? (
+          <p className="text-xs text-gray-500 italic">
+            No custom clusters — this client uses the canonical default set.
+            Generate below, or add clusters manually.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {clusters.map((c, i) => {
+              const inUse = promptCountByCluster[c.id] ?? 0
+              return (
+                <div key={c.id} className="flex flex-wrap items-start gap-2">
+                  <input
+                    value={c.name}
+                    onChange={(e) => updateCluster(i, { name: e.target.value })}
+                    placeholder="Cluster name"
+                    className={`${inputCls} flex-[1_1_180px] min-w-[160px] font-medium`}
+                  />
+                  <input
+                    value={c.description ?? ''}
+                    onChange={(e) => updateCluster(i, { description: e.target.value })}
+                    placeholder="one-line description — why this bucket matters"
+                    className={`${inputCls} flex-[2_1_280px] min-w-[220px]`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCluster(i)}
+                    disabled={inUse > 0}
+                    title={
+                      inUse > 0
+                        ? `Reassign its ${inUse} prompt${inUse === 1 ? '' : 's'} before removing`
+                        : 'Remove cluster'
+                    }
+                    className="px-2 py-2 text-gray-500 hover:text-red-400 disabled:opacity-30 disabled:hover:text-gray-500 text-sm"
+                    aria-label="Remove cluster"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={addCluster}
+          className="text-xs px-3 py-1.5 rounded-md border border-gray-700 bg-gray-900 hover:border-gray-500 text-gray-300"
+        >
+          + Add cluster
+        </button>
+      </div>
 
       <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
@@ -338,14 +451,21 @@ export default function EditClientForm({
         </button>
       </div>
 
-      {changed && (
+      {needsRebaseline ? (
         <div className="rounded-md border border-amber-700/50 bg-amber-500/10 p-3 text-xs text-amber-200">
-          ⚠ Saving a changed prompt set re-baselines KPI 3 &amp; the citation
-          network — existing snapshots use the old cluster ids, so those slices
-          show &ldquo;no data&rdquo; until a fresh monthly{' '}
+          ⚠ You changed cluster ids or prompt text, which re-baselines KPI 3 &amp;
+          the citation network — existing snapshots use the old cluster ids, so
+          those slices show &ldquo;no data&rdquo; until a fresh monthly{' '}
           <code>/api/cron/geo-seo-gap?client={slug}&amp;mode=monthly</code> and{' '}
           <code>/api/cron/citation-network?client={slug}</code> run (~$17).
         </div>
+      ) : (
+        clusterMetaChanged && (
+          <div className="rounded-md border border-emerald-700/50 bg-emerald-500/10 p-3 text-xs text-emerald-200">
+            ✓ Renaming clusters only — cosmetic. Existing snapshots stay intact
+            and re-render under the new names. No queries re-run, no cost.
+          </div>
+        )
       )}
 
       {error && (

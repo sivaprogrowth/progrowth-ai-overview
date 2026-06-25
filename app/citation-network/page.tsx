@@ -3,7 +3,7 @@ import { cookies } from 'next/headers'
 import CitationNetworkView from '@/components/CitationNetworkView'
 import { fetchCitationNetworkSnapshot } from '@/lib/citationNetworkFetcher'
 import { getClientFromCookies } from '@/lib/clientContext'
-import { getClustersForClient } from '@/lib/prompts'
+import { getClustersForClient, getPromptsForClient } from '@/lib/prompts'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -58,6 +58,12 @@ export default async function CitationNetworkPage() {
           snapshot={snapshot}
           client={{ slug: client.slug, company_name: client.company_name }}
           clusters={getClustersForClient(client).map((c) => ({ id: c.id, name: c.name }))}
+          prompts={getPromptsForClient(client).map((p) => ({
+            id: p.id,
+            text: p.text,
+            type: p.type,
+            cluster: p.cluster,
+          }))}
           competitorSites={client.competitor_sites}
         />
       </div>
