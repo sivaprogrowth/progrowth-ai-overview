@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import ClientSwitcher from "@/components/ClientSwitcher";
+import LogoutButton from "@/components/LogoutButton";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -31,8 +32,9 @@ export default function RootLayout({
       >
         {/* Floating client switcher — hidden when only the default client
             exists, so single-tenant usage stays unchanged. */}
-        <div className="fixed top-3 right-4 z-50">
+        <div className="fixed top-3 right-4 z-50 flex items-center gap-2">
           <ClientSwitcher />
+          <LogoutButton />
         </div>
         {children}
       </body>
