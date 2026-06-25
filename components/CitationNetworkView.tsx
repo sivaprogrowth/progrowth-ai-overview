@@ -158,6 +158,20 @@ export default function CitationNetworkView({ snapshot, client, clusters, prompt
 
   return (
     <div className='space-y-8'>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
+        <p className='text-xs text-gray-500 max-w-xl'>
+          Re-running fires all {snapshot.promptsRun * snapshot.clustersCovered.length} prompts ×{' '}
+          {ALL_ENGINES.length} engines again and overwrites this snapshot — do it after editing
+          clusters/prompts, or to refresh the data.
+        </p>
+        <RunAnalysisButton
+          clientSlug={client.slug}
+          job='citation-network'
+          label='Re-run analysis'
+          estimate='~1 min · ~$8'
+        />
+      </div>
+
       <div className='grid grid-cols-1 sm:grid-cols-4 gap-3'>
         <Stat label='Last run' value={formatDate(snapshot.generatedAt)} />
         <Stat label='Clusters covered' value={`${snapshot.clustersCovered.length} / ${clusters.length}`} />
