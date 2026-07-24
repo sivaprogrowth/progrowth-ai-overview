@@ -18,6 +18,10 @@
   },
   "crons": [
     {
+      "path": "/api/cron/citation-network",
+      "schedule": "0 2 * * 1"
+    },
+    {
       "path": "/api/cron/matomo-analysis",
       "schedule": "0 9 * * 1"
     },
