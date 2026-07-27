@@ -16,12 +16,17 @@ import {
 
 export const runtime = 'nodejs'
 /**
- * 300s, not 60s. The mention-search loop below runs SEQUENTIAL batches of
- * live DataForSEO calls at ~10.5s per batch, and the DB insert is the last
- * statement in the route — so an overrun costs the full spend and writes
- * nothing, silently. At 60s this route died every Monday from 2026-06-29
- * (24 crawled pages → 29 mention keywords → 6 batches → ~63s) while
+ * 300s, not 60s — the platform maximum, and still not comfortably enough.
+ *
+ * The mention-search loop runs sequential batches of live DataForSEO calls
+ * whose measured latency is ~7-32s each (median ~17s), and the DB insert is
+ * the last statement in the route. So an overrun costs the full spend and
+ * writes nothing. At 60s this route died every Monday from 2026-06-29 while
  * burning ~$11.60 per killed attempt.
+ *
+ * Raising this was necessary but NOT sufficient: a 300s run still died,
+ * because nothing bounded an individual call or the loop as a whole. Those
+ * are handled by DFS_CALL_TIMEOUT_MS and PROVIDER_DEADLINE_MS respectively.
  *
  * vercel.json pins this route's maxDuration independently; both must say
  * 300 or the lower one wins.
@@ -29,21 +34,37 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 /**
- * Hard ceiling on mention keywords per run.
- *
- * Sized against the 300s budget, NOT against average latency. Each call is
- * capped at DFS_CALL_TIMEOUT_MS (30s) in lib/dataforseo, and a batch of 5
- * keywords awaits its slowest call — so worst case is 30s per batch.
- * 40 keywords = 8 batches = 240s worst case, leaving headroom for the
- * Matomo fetch and the insert. Raising this without raising maxDuration
- * puts the run back over the cliff.
- *
- * The 2026-07-27 failure that set this number: 29 keywords, 300s budget,
- * only 17 of 58 calls completed, because one straggler stalled a batch
- * for 163s. Month mode (111 keywords) is far beyond reach and gets
- * truncated here rather than silently timing out.
+ * Cost ceiling, not a time ceiling. Every call is billed (~$0.20; even a
+ * 19-item response cost $0.119), so N keywords = 2N calls = ~$0.40N.
+ * 40 keywords caps a run at roughly $16. Time is governed by
+ * PROVIDER_DEADLINE_MS below, which will usually bind first.
  */
 const MAX_MENTION_KEYWORDS = 40
+
+/**
+ * Wall-clock budget for the mention-search loop, inside maxDuration=300.
+ *
+ * THE STRUCTURAL PROBLEM: at a measured ~17s median per call and 2 calls
+ * per keyword, a full 36-keyword run needs 2-4 minutes of provider time
+ * even at this concurrency — against a hard 300s platform ceiling, with
+ * the DB write at the very end. There is no timeout value that makes
+ * "check every keyword, then write" fit reliably. So the loop now stops
+ * itself at a deadline and reports what it did not reach, instead of
+ * being killed mid-flight and reporting nothing.
+ *
+ * 210s leaves ~90s for the Matomo fetch, transform and insert. A run that
+ * hits this deadline is a PARTIAL run and says so — see keywordsUnchecked.
+ * Full coverage needs the work moved off the request path entirely; this
+ * makes the shortfall honest and survivable, not invisible.
+ */
+const PROVIDER_DEADLINE_MS = 210_000
+
+/**
+ * 4 keywords = 8 concurrent calls. Down from 5 (10 concurrent): the
+ * probe showed the latency tail worsens sharply with concurrency (163s
+ * under 10-way vs 32.3s sequential worst case).
+ */
+const BATCH_SIZE = 4
 
 export async function GET(req: NextRequest) {
   // Verify cron secret (Vercel injects this for cron jobs)
@@ -130,22 +151,80 @@ export async function GET(req: NextRequest) {
 
   const googleResults: any[] = []
   const chatgptResults: any[] = []
-  const batchSize = 5
 
-  for (let i = 0; i < mentionKeywords.length; i += batchSize) {
-    const batch = mentionKeywords.slice(i, i + batchSize)
-    const calls = batch.flatMap((kw) => {
+  // A keyword is CHECKED only if at least one of its two calls actually
+  // returned. Anything else — aborted, errored, or never attempted because
+  // the deadline hit — is unchecked, and must not be reported as "the brand
+  // was not mentioned". That conflation is why three empty runs and one
+  // 46%-complete run all looked like clean successes.
+  const checkedKeywords = new Set<string>()
+  const failedKeywords: string[] = []
+  const callErrors: string[] = []
+  const loopStartedAt = Date.now()
+  let deadlineHit = false
+  let unattempted: string[] = []
+
+  for (let i = 0; i < mentionKeywords.length; i += BATCH_SIZE) {
+    const elapsed = Date.now() - loopStartedAt
+    if (elapsed > PROVIDER_DEADLINE_MS) {
+      deadlineHit = true
+      unattempted = mentionKeywords.slice(i)
+      console.warn(
+        `[matomo-analysis] ${client.slug}: provider deadline hit after ${Math.round(elapsed / 1000)}s — ` +
+          `${unattempted.length} keywords not attempted: ${unattempted.join(', ')}`
+      )
+      break
+    }
+
+    const batch = mentionKeywords.slice(i, i + BATCH_SIZE)
+    // Record the reason a call failed instead of erasing it. The old
+    // `.catch(() => null)` made an aborted call indistinguishable from a
+    // genuine "no mentions found", which left every failure invisible.
+    const call = (kw: string, platform: 'google' | 'chat_gpt') => {
       const target = [{ keyword: kw, match_type: 'partial_match' as const, search_scope: ['any' as const] }]
-      return [
-        fetchMentionSearch(target, 'google', 100).catch(() => null),
-        fetchMentionSearch(target, 'chat_gpt', 100).catch(() => null),
-      ]
-    })
+      return fetchMentionSearch(target, platform, 100).catch((err: unknown) => {
+        const name = (err as { name?: string })?.name
+        const reason = name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : String(err).slice(0, 120)
+        callErrors.push(`${platform}:${kw}:${reason}`)
+        return null
+      })
+    }
+
+    const calls = batch.flatMap((kw) => [call(kw, 'google'), call(kw, 'chat_gpt')])
     const results = await Promise.all(calls)
     for (let j = 0; j < batch.length; j++) {
-      googleResults.push(results[j * 2])
-      chatgptResults.push(results[j * 2 + 1])
+      const g = results[j * 2]
+      const c = results[j * 2 + 1]
+      googleResults.push(g)
+      chatgptResults.push(c)
+      if (g !== null || c !== null) checkedKeywords.add(batch[j])
+      else failedKeywords.push(batch[j])
     }
+  }
+
+  if (callErrors.length > 0) {
+    console.warn(
+      `[matomo-analysis] ${client.slug}: ${callErrors.length} provider calls failed — ${callErrors.join(' | ')}`
+    )
+  }
+
+  // Only keywords we actually checked may carry a verdict. The rest are
+  // reported separately so a partial run can never read as a full one.
+  const analysedKeywords = keywords.filter((kw) => checkedKeywords.has(kw))
+  const uncheckedKeywords = keywords.filter((kw) => !checkedKeywords.has(kw))
+
+  if (analysedKeywords.length === 0) {
+    // Nothing was verified: writing a row here would publish "no mentions
+    // anywhere" as a finding. Fail loudly instead.
+    return NextResponse.json(
+      {
+        error: 'No provider calls succeeded — refusing to write a row that would read as zero mentions.',
+        keywords: keywords.length,
+        failedCalls: callErrors.length,
+        sampleErrors: callErrors.slice(0, 5),
+      },
+      { status: 502 }
+    )
   }
 
   function mergeResponses(responses: any[]): any {
@@ -187,7 +266,9 @@ export async function GET(req: NextRequest) {
     chatgptMap.delete(coreLower)
   }
 
-  const rows = transformToRows(keywords, domain, {
+  // analysedKeywords, NOT keywords — an unchecked keyword gets no row at
+  // all rather than a row asserting the brand was absent.
+  const rows = transformToRows(analysedKeywords, domain, {
     google: googleMap,
     chatgpt: chatgptMap,
     perplexity: new Map<string, PlatformResult>(),
@@ -197,6 +278,9 @@ export async function GET(req: NextRequest) {
   const summary = {
     domain,
     totalKeywords: keywords.length,
+    keywordsChecked: analysedKeywords.length,
+    keywordsUnchecked: uncheckedKeywords.length,
+    coverageComplete: uncheckedKeywords.length === 0 && !deadlineHit,
     googlePresent: Array.from(googleMap.values()).filter((m) => m.domainFound).length,
     chatgptPresent: Array.from(chatgptMap.values()).filter((m) => m.domainFound).length,
     perplexityPresent: 0,
@@ -207,9 +291,14 @@ export async function GET(req: NextRequest) {
   const crawlMetadata = {
     period: 'week',
     fetchedAt: new Date().toISOString(),
-    // Recorded so a capped run is never mistaken for full coverage.
+    // Recorded so a partial run is never mistaken for full coverage.
     mentionKeywordsAnalysed: mentionKeywords.length,
     mentionKeywordsDropped: droppedKeywords,
+    keywordsUnchecked: uncheckedKeywords,
+    keywordsFailed: failedKeywords,
+    keywordsUnattempted: unattempted,
+    deadlineHit,
+    failedCallCount: callErrors.length,
     pages: crawledPages.map((p) => ({
       path: p.path,
       hits: p.hits,
@@ -235,9 +324,15 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    message: 'Matomo crawl analysis completed',
+    message: deadlineHit || uncheckedKeywords.length > 0
+      ? 'Matomo crawl analysis completed — PARTIAL coverage'
+      : 'Matomo crawl analysis completed',
     crawledPages: crawledPages.length,
     keywords: keywords.length,
+    keywordsChecked: analysedKeywords.length,
+    keywordsUnchecked: uncheckedKeywords.length,
+    deadlineHit,
+    failedCallCount: callErrors.length,
     mentionKeywordsAnalysed: mentionKeywords.length,
     mentionKeywordsDropped: droppedKeywords.length,
     summary,

@@ -64,15 +64,28 @@ export async function checkDailyCap(): Promise<{ allowed: boolean; spent: number
 /**
  * Per-call ceiling for the live endpoints.
  *
- * These calls have brutal TAIL latency under concurrency: a lone call
- * measured 10.5s, but inside a 10-way parallel batch on 2026-07-27 one
- * straggler took 163s. Callers that await a whole batch are governed by
- * their slowest member, so one straggler burns the entire function
- * budget. Cutting a call loose costs its result (DataForSEO may still
- * bill it, and an abandoned call cannot be cost-logged, so the daily
- * total under-counts slightly) — that is cheaper than losing the run.
+ * MEASURED, not guessed. A 6-call sequential probe of
+ * llm_mentions/search/live on 2026-07-27 (zero concurrency):
+ *   6.8s, 9.1s, 14.8s, 16.5s, 22.2s, 32.3s — all HTTP 200 / status 20000
+ * Under 10-way concurrency the same endpoint produced a 163s straggler.
+ * So the endpoint is inherently slow (median ~17s) and concurrency
+ * amplifies the tail; it is not one pathological call.
+ *
+ * The first version of this constant was 30s, set from a single 10.5s
+ * sample. That sits BELOW the observed sequential maximum of 32.3s, so it
+ * severed healthy in-flight calls: only 11 of 72 completed and the run
+ * still returned 200, publishing 13 unchecked keywords as if checked.
+ * A timeout under the provider's normal latency is not a safety net, it
+ * is a data-loss generator.
+ *
+ * 90s clears the sequential max with ~3x headroom and still bounds a
+ * concurrency straggler well inside the caller's deadline. Callers must
+ * ALSO enforce their own wall-clock deadline — this only bounds one call.
+ *
+ * Note: an aborted call may still be billed by DataForSEO and cannot be
+ * cost-logged, so the daily total under-counts by any aborted call.
  */
-const DFS_CALL_TIMEOUT_MS = 30_000
+const DFS_CALL_TIMEOUT_MS = 90_000
 
 async function dfsPost<T = any>(path: string, body: object[]): Promise<T> {
   const res = await fetch(`${DATAFORSEO_BASE}${path}`, {
