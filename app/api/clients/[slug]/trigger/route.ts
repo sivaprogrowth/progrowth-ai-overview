@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getClientBySlug } from '@/lib/clients'
+import { resolvePublicOrigin } from '@/lib/publicOrigin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -61,7 +62,9 @@ export async function POST(
   }
 
   // Pin ?client=<slug> so the cron resolves THIS tenant (not the cookie/default).
-  const url = new URL(`${req.nextUrl.origin}/api/cron/${job}`)
+  // Public origin, not the request origin: triggering from a *.vercel.app
+  // deployment URL would self-fetch an SSO-protected host and 302.
+  const url = new URL(`${resolvePublicOrigin(req)}/api/cron/${job}`)
   url.searchParams.set('client', client.slug)
 
   try {

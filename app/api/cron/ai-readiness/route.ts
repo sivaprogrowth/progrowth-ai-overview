@@ -12,6 +12,7 @@ import {
 import { DataForSeoCapExceededError } from '@/lib/dataforseo'
 import { getClientFromRequest } from '@/lib/clientContext'
 import { listActiveClients, type Client } from '@/lib/clients'
+import { resolvePublicOrigin } from '@/lib/publicOrigin'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -65,7 +66,9 @@ export async function GET(req: NextRequest) {
 async function fanOut(req: NextRequest): Promise<NextResponse> {
   const clients = (await listActiveClients()).filter((c) => c.cron_enabled)
   const cronSecret = process.env.CRON_SECRET
-  const origin = req.nextUrl.origin
+  // Not req.nextUrl.origin — a cron hits the SSO-protected deployment host
+  // and every child would 302. See lib/publicOrigin.ts.
+  const origin = resolvePublicOrigin(req)
 
   const dispatched = await Promise.allSettled(
     clients.map((c) =>
@@ -81,7 +84,9 @@ async function fanOut(req: NextRequest): Promise<NextResponse> {
     cronEnabledClients: clients.map((c) => c.slug),
     dispatched: dispatched.map((d, i) =>
       d.status === 'fulfilled'
-        ? { slug: clients[i].slug, ok: true, status: d.value.status, searchEligible: d.value.body?.searchEligible ?? null }
+        // ok must reflect the child's status — hardcoding true is what let a
+        // fan-out of five 302s report itself as a healthy run.
+        ? { slug: clients[i].slug, ok: d.value.status < 400, status: d.value.status, searchEligible: d.value.body?.searchEligible ?? null }
         : { slug: clients[i].slug, ok: false, error: String(d.reason) }
     ),
   })

@@ -10,10 +10,15 @@
  * otherwise the incoming Authorization header (so a manual
  * `Bearer BATCH_API_KEY` trigger also fans out). Original query params are
  * preserved so ?mode=monthly / ?engines=… propagate to every child.
+ *
+ * Origin: children target resolvePublicOrigin(), NOT req.nextUrl.origin —
+ * Vercel cron hits the SSO-protected deployment host and self-fetching it
+ * 302s every child before middleware runs. See lib/publicOrigin.ts.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { listActiveClients } from './clients'
+import { resolvePublicOrigin } from './publicOrigin'
 
 /** True when the request targets no specific client → should fan out. */
 export function shouldFanOut(req: NextRequest): boolean {
@@ -34,7 +39,7 @@ export async function fanOutValues(
   param: string,
   values: string[]
 ): Promise<NextResponse> {
-  const origin = req.nextUrl.origin
+  const origin = resolvePublicOrigin(req)
   const cronSecret = process.env.CRON_SECRET
   const auth = cronSecret ? `Bearer ${cronSecret}` : req.headers.get('authorization')
 
@@ -67,7 +72,7 @@ export async function fanOutToClients(
   opts: { extraParams?: Record<string, string> } = {}
 ): Promise<NextResponse> {
   const clients = (await listActiveClients()).filter((c) => c.cron_enabled)
-  const origin = req.nextUrl.origin
+  const origin = resolvePublicOrigin(req)
   const cronSecret = process.env.CRON_SECRET
   const auth = cronSecret ? `Bearer ${cronSecret}` : req.headers.get('authorization')
 
