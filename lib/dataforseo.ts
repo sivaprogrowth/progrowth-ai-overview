@@ -61,6 +61,19 @@ export async function checkDailyCap(): Promise<{ allowed: boolean; spent: number
   return { allowed: spent < DAILY_COST_CAP, spent, cap: DAILY_COST_CAP }
 }
 
+/**
+ * Per-call ceiling for the live endpoints.
+ *
+ * These calls have brutal TAIL latency under concurrency: a lone call
+ * measured 10.5s, but inside a 10-way parallel batch on 2026-07-27 one
+ * straggler took 163s. Callers that await a whole batch are governed by
+ * their slowest member, so one straggler burns the entire function
+ * budget. Cutting a call loose costs its result (DataForSEO may still
+ * bill it, and an abandoned call cannot be cost-logged, so the daily
+ * total under-counts slightly) — that is cheaper than losing the run.
+ */
+const DFS_CALL_TIMEOUT_MS = 30_000
+
 async function dfsPost<T = any>(path: string, body: object[]): Promise<T> {
   const res = await fetch(`${DATAFORSEO_BASE}${path}`, {
     method: 'POST',
@@ -69,6 +82,7 @@ async function dfsPost<T = any>(path: string, body: object[]): Promise<T> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(DFS_CALL_TIMEOUT_MS),
   })
   if (!res.ok) {
     const text = await res.text()

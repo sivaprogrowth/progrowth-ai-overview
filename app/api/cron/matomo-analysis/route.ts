@@ -29,11 +29,21 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 /**
- * Hard ceiling on mention keywords per run. Month mode reached 111
- * keywords (~242s, ~$44) — unbounded work behind a paid API needs a stop.
- * Anything dropped is reported in the response, never silently trimmed.
+ * Hard ceiling on mention keywords per run.
+ *
+ * Sized against the 300s budget, NOT against average latency. Each call is
+ * capped at DFS_CALL_TIMEOUT_MS (30s) in lib/dataforseo, and a batch of 5
+ * keywords awaits its slowest call — so worst case is 30s per batch.
+ * 40 keywords = 8 batches = 240s worst case, leaving headroom for the
+ * Matomo fetch and the insert. Raising this without raising maxDuration
+ * puts the run back over the cliff.
+ *
+ * The 2026-07-27 failure that set this number: 29 keywords, 300s budget,
+ * only 17 of 58 calls completed, because one straggler stalled a batch
+ * for 163s. Month mode (111 keywords) is far beyond reach and gets
+ * truncated here rather than silently timing out.
  */
-const MAX_MENTION_KEYWORDS = 60
+const MAX_MENTION_KEYWORDS = 40
 
 export async function GET(req: NextRequest) {
   // Verify cron secret (Vercel injects this for cron jobs)
