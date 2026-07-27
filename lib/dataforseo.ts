@@ -10,24 +10,50 @@ function getAuth(): string {
   return Buffer.from(`${login}:${password}`).toString('base64')
 }
 
+/**
+ * Today's DataForSEO spend, in USD.
+ *
+ * THROWS on a query failure — it must not answer "$0 spent". This function
+ * previously discarded the Supabase error and returned 0, which meant that
+ * when `api_cost_log` turned out never to have been created (see
+ * migrations/005), the daily cap silently authorised every call for two
+ * months. A blind spend guard is worse than no spend guard, because it
+ * reads as protection. Fail closed and let the caller 500.
+ */
 async function getDailySpend(): Promise<number> {
   const today = new Date().toISOString().slice(0, 10)
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('api_cost_log')
     .select('cost')
     .eq('date', today)
-  if (!data) return 0
-  return data.reduce((sum: number, row: any) => sum + parseFloat(row.cost || 0), 0)
+  if (error) {
+    throw new Error(
+      `Cannot read api_cost_log — refusing to report spend as $0 (${error.message}). ` +
+        `Apply migrations/005_api_cost_log.sql.`
+    )
+  }
+  return (data ?? []).reduce((sum: number, row: any) => sum + parseFloat(row.cost || 0), 0)
 }
 
+/**
+ * Record the cost of a paid call. Called after the money is already spent,
+ * so a failure here must not throw away the caller's result — but it must
+ * be visible, because every dropped write blinds the cap by that much.
+ */
 async function logApiCost(endpoint: string, cost: number, calls: number): Promise<void> {
   const today = new Date().toISOString().slice(0, 10)
-  await supabase.from('api_cost_log').insert({
+  const { error } = await supabase.from('api_cost_log').insert({
     date: today,
     endpoint,
     cost,
     calls,
   })
+  if (error) {
+    console.error(
+      `[dataforseo] SPEND NOT RECORDED for ${endpoint} ($${cost}, ${calls} calls): ${error.message}. ` +
+        `The daily cap is now under-counting by this amount.`
+    )
+  }
 }
 
 export async function checkDailyCap(): Promise<{ allowed: boolean; spent: number; cap: number }> {
@@ -54,7 +80,11 @@ async function dfsPost<T = any>(path: string, body: object[]): Promise<T> {
   const taskCost = json?.cost || 0
   const taskCount = json?.tasks_count || 1
   if (taskCost > 0) {
-    logApiCost(path, taskCost, taskCount).catch(() => {})
+    // logApiCost already reports its own failures; this catch only stops an
+    // unexpected throw from taking down a call whose cost is already sunk.
+    logApiCost(path, taskCost, taskCount).catch((err) =>
+      console.error(`[dataforseo] cost logging threw for ${path}:`, err)
+    )
   }
 
   return json as T

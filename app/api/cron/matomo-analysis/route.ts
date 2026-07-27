@@ -15,7 +15,25 @@ import {
 } from '@/lib/transform'
 
 export const runtime = 'nodejs'
-export const maxDuration = 60
+/**
+ * 300s, not 60s. The mention-search loop below runs SEQUENTIAL batches of
+ * live DataForSEO calls at ~10.5s per batch, and the DB insert is the last
+ * statement in the route — so an overrun costs the full spend and writes
+ * nothing, silently. At 60s this route died every Monday from 2026-06-29
+ * (24 crawled pages → 29 mention keywords → 6 batches → ~63s) while
+ * burning ~$11.60 per killed attempt.
+ *
+ * vercel.json pins this route's maxDuration independently; both must say
+ * 300 or the lower one wins.
+ */
+export const maxDuration = 300
+
+/**
+ * Hard ceiling on mention keywords per run. Month mode reached 111
+ * keywords (~242s, ~$44) — unbounded work behind a paid API needs a stop.
+ * Anything dropped is reported in the response, never silently trimmed.
+ */
+const MAX_MENTION_KEYWORDS = 60
 
 export async function GET(req: NextRequest) {
   // Verify cron secret (Vercel injects this for cron jobs)
@@ -90,7 +108,15 @@ export async function GET(req: NextRequest) {
 
   // Run Google + ChatGPT analysis only (fast, cheap)
   const corePhrases = extractCorePhrases(keywords)
-  const mentionKeywords = [...keywords, ...corePhrases]
+  const allMentionKeywords = [...keywords, ...corePhrases]
+  const mentionKeywords = allMentionKeywords.slice(0, MAX_MENTION_KEYWORDS)
+  const droppedKeywords = allMentionKeywords.slice(MAX_MENTION_KEYWORDS)
+  if (droppedKeywords.length > 0) {
+    console.warn(
+      `[matomo-analysis] ${client.slug}: capped at ${MAX_MENTION_KEYWORDS} mention keywords, ` +
+        `dropped ${droppedKeywords.length}: ${droppedKeywords.join(', ')}`
+    )
+  }
 
   const googleResults: any[] = []
   const chatgptResults: any[] = []
@@ -171,6 +197,9 @@ export async function GET(req: NextRequest) {
   const crawlMetadata = {
     period: 'week',
     fetchedAt: new Date().toISOString(),
+    // Recorded so a capped run is never mistaken for full coverage.
+    mentionKeywordsAnalysed: mentionKeywords.length,
+    mentionKeywordsDropped: droppedKeywords,
     pages: crawledPages.map((p) => ({
       path: p.path,
       hits: p.hits,
@@ -199,6 +228,8 @@ export async function GET(req: NextRequest) {
     message: 'Matomo crawl analysis completed',
     crawledPages: crawledPages.length,
     keywords: keywords.length,
+    mentionKeywordsAnalysed: mentionKeywords.length,
+    mentionKeywordsDropped: droppedKeywords.length,
     summary,
   })
 }
