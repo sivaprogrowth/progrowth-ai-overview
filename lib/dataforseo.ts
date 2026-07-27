@@ -103,6 +103,24 @@ async function dfsPost<T = any>(path: string, body: object[]): Promise<T> {
   }
   const json = await res.json() as any
 
+  // A DataForSEO task can FAIL while the HTTP request succeeds: the envelope
+  // returns 200 and the failure lives in tasks[].status_code. Measured
+  // 2026-07-27 — six concurrent llm_mentions calls returned three 50000
+  // ("internal error") tasks, each HTTP 200, each with zero items and $0 cost,
+  // after ~50s. Without this check they flow back as a perfectly valid empty
+  // result, and a caller cannot tell "the provider broke" from "there are no
+  // mentions". That is how a run reports keywords as checked-and-empty when
+  // they were never really checked. 20000 = Ok; 20100 = task created.
+  const tasks: any[] = Array.isArray(json?.tasks) ? json.tasks : []
+  const bad = tasks.find(
+    (t) => typeof t?.status_code === 'number' && t.status_code !== 20000 && t.status_code !== 20100
+  )
+  if (bad) {
+    throw new Error(
+      `DataForSEO ${path} task failed: status_code=${bad.status_code} ${bad.status_message ?? ''}`.trim()
+    )
+  }
+
   // Log cost from response
   const taskCost = json?.cost || 0
   const taskCount = json?.tasks_count || 1

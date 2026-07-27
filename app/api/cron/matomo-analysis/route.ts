@@ -54,17 +54,28 @@ const MAX_MENTION_KEYWORDS = 40
  *
  * 210s leaves ~90s for the Matomo fetch, transform and insert. A run that
  * hits this deadline is a PARTIAL run and says so — see keywordsUnchecked.
- * Full coverage needs the work moved off the request path entirely; this
- * makes the shortfall honest and survivable, not invisible.
+ *
+ * Coverage is completed ACROSS runs, not within one: the rotation below
+ * puts last run's unchecked keywords at the front of this run's queue, so
+ * the deadline truncates a different tail each week instead of the same one
+ * forever. Every keyword gets checked; it just takes a few runs.
  */
 const PROVIDER_DEADLINE_MS = 210_000
 
 /**
- * 4 keywords = 8 concurrent calls. Down from 5 (10 concurrent): the
- * probe showed the latency tail worsens sharply with concurrency (163s
- * under 10-way vs 32.3s sequential worst case).
+ * 1 keyword = 2 concurrent calls (google + chat_gpt for the same term).
+ *
+ * MEASURED 2026-07-27, and the reason coverage was so bad: six CONCURRENT
+ * llm_mentions calls returned three `50000` internal-error tasks — HTTP 200,
+ * zero items, $0 — after ~50s each. The same six keywords run SEQUENTIALLY
+ * were 6/6 Ok. Concurrency does not merely lengthen the tail on this
+ * endpoint, it makes the provider fail requests outright, and each failure
+ * burns ~50s of the budget for nothing.
+ *
+ * So parallelism here is negative-value beyond the platform pair. Fewer
+ * calls in flight completes MORE keywords per minute, not fewer.
  */
-const BATCH_SIZE = 4
+const BATCH_SIZE = 1
 
 export async function GET(req: NextRequest) {
   // Verify cron secret (Vercel injects this for cron jobs)
@@ -137,9 +148,41 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ message: 'No keywords extracted' })
   }
 
-  // Run Google + ChatGPT analysis only (fast, cheap)
+  // ROTATION: carry last run's misses to the front of this run's queue.
+  //
+  // A single request cannot check every keyword — the provider needs ~17s per
+  // call, two calls per keyword, and concurrency makes it fail rather than go
+  // faster (see BATCH_SIZE). Without rotation the deadline always truncates
+  // the SAME tail of the list, so those keywords are never checked in any
+  // week, however many times the cron runs. Prioritising last week's
+  // unchecked keywords makes coverage complete ACROSS runs instead of
+  // permanently partial within one.
+  const { data: priorRun } = await supabase
+    .from('analyses')
+    .select('summary')
+    .eq('client_id', client.id)
+    .eq('summary->>source', 'matomo-crawl')
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const priorUnchecked: string[] = (() => {
+    const raw = (priorRun?.[0]?.summary as { crawlMetadata?: { keywordsUnchecked?: unknown } } | undefined)
+      ?.crawlMetadata?.keywordsUnchecked
+    return Array.isArray(raw) ? raw.map((k) => String(k)) : []
+  })()
+  const carriedOver = keywords.filter((kw) => priorUnchecked.includes(kw))
+  const freshKeywords = keywords.filter((kw) => !priorUnchecked.includes(kw))
+  if (carriedOver.length > 0) {
+    console.log(
+      `[matomo-analysis] ${client.slug}: carrying ${carriedOver.length} keyword(s) unchecked last run to the front: ${carriedOver.join(', ')}`
+    )
+  }
+
+  // Core phrases last: they are merged into their parent keyword after
+  // parsing and then discarded, so they are an enrichment, never the point.
+  // Spending the deadline on them while a real keyword goes unchecked is
+  // backwards.
   const corePhrases = extractCorePhrases(keywords)
-  const allMentionKeywords = [...keywords, ...corePhrases]
+  const allMentionKeywords = [...carriedOver, ...freshKeywords, ...corePhrases]
   const mentionKeywords = allMentionKeywords.slice(0, MAX_MENTION_KEYWORDS)
   const droppedKeywords = allMentionKeywords.slice(MAX_MENTION_KEYWORDS)
   if (droppedKeywords.length > 0) {
@@ -295,6 +338,7 @@ export async function GET(req: NextRequest) {
     mentionKeywordsAnalysed: mentionKeywords.length,
     mentionKeywordsDropped: droppedKeywords,
     keywordsUnchecked: uncheckedKeywords,
+    keywordsCarriedIn: carriedOver,
     keywordsFailed: failedKeywords,
     keywordsUnattempted: unattempted,
     deadlineHit,
