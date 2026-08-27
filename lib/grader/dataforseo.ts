@@ -119,7 +119,14 @@ export async function fetchGraderAnswer(
     }
   } catch (e) {
     if (e instanceof DataForSeoCapExceededError) {
-      return { ...empty, error: `daily spend cap reached ($${e.spent.toFixed(2)}/$${e.cap})` }
+      // Deliberately generic — the raw message carries the actual dollar
+      // spend/cap (DataForSeoCapExceededError's own constructor interpolates
+      // them, by design, for the internal on-page-audit caller in
+      // lib/dataforseo.ts). This EngineAnswer.error string is persisted into
+      // the report and — before Phase 3's lib/grader/public-report.ts
+      // sanitizer existed — was returned verbatim by the public report API.
+      // Never reintroduce the real figures here; see Task 10/19.
+      return { ...empty, error: 'daily analysis budget reached' }
     }
     return { ...empty, error: e instanceof Error ? e.message : 'provider call failed' }
   }

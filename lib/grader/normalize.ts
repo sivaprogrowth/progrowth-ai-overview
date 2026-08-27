@@ -51,7 +51,9 @@ const BLOCKED_TLDS = new Set(['local', 'localhost', 'internal', 'test', 'example
  */
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
-function isIpv4(host: string): boolean {
+/** Exported for lib/grader/ssrf-guard.ts, which needs to tell "public IPv4
+ *  literal, no DNS lookup needed" apart from "a hostname to resolve". */
+export function isIpv4(host: string): boolean {
   const parts = host.split('.')
   if (parts.length !== 4) return false
   return parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)

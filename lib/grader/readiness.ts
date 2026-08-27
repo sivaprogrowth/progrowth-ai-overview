@@ -5,8 +5,11 @@
  * sitemap.xml), each capped by timeout, response-size and redirect limits so
  * a malicious or oversized target cannot turn a public POST into a resource
  * sink. This is the SSRF-safety boundary alongside lib/grader/normalize.ts
- * — normalize.ts refuses the target host up front, this module bounds what
- * happens once a fetch to an allowed host is actually made.
+ * and lib/grader/ssrf-guard.ts — normalize.ts refuses an obviously-private
+ * host string up front at submission time, ssrf-guard.ts additionally
+ * resolves DNS and re-checks every redirect hop right before this module
+ * connects to it, and this module bounds what happens once a fetch to a
+ * checked host is actually made (timeout/redirect/size limits).
  *
  * lib/aiReadiness.ts (auditRobots) already does a careful per-bot robots.txt
  * parse for the internal product; it is reused as-is rather than
@@ -21,6 +24,7 @@
  */
 
 import { auditRobots } from '../aiReadiness'
+import { isSafeHostToFetch } from './ssrf-guard'
 import type { BrandMatcher } from './brand-matcher'
 import type { ReadinessCheck, ReadinessResult } from './types'
 
@@ -37,14 +41,28 @@ interface BoundedFetchResult {
 }
 
 /**
- * fetch() with an enforced timeout, a manual bounded-redirect walk (so a
- * redirect chain can't be used to bounce off an internal host after
- * normalize.ts already approved the original), and a body-size cap.
+ * fetch() with an enforced timeout, a manual bounded-redirect walk, and a
+ * body-size cap.
+ *
+ * SSRF (Phase 3, Task 15): normalize.ts only approves the *originally
+ * submitted* hostname textually, once, at submission time. Every hostname
+ * this function is about to actually connect to — the initial URL AND
+ * every redirect hop — is re-checked here via isSafeHostToFetch(), which
+ * additionally resolves DNS and rejects a hostname that maps to a private
+ * address. Without the per-hop check, a redirect to
+ * `http://169.254.169.254/` would previously have been followed (only the
+ * scheme was validated on redirect, never the host).
  */
 async function boundedFetch(url: string): Promise<BoundedFetchResult> {
   let current = url
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const hostname = new URL(current).hostname
+      const hostCheck = await isSafeHostToFetch(hostname)
+      if (!hostCheck.safe) {
+        return { ok: false, status: 0, text: '', error: 'refused to fetch an unsafe or private host' }
+      }
+
       const res = await fetch(current, {
         redirect: 'manual',
         headers: { 'User-Agent': 'ProGrowth-AI-Grader/1.0' },

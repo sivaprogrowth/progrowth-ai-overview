@@ -7,6 +7,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getGraderRun } from '@/lib/grader/store'
 import { isValidReportId } from '@/lib/grader/ids'
+import { withStaleProcessingRecovery } from '@/lib/grader/stale-processing'
+import { toPublicGraderReport } from '@/lib/grader/public-report'
 
 export const runtime = 'nodejs'
 
@@ -28,6 +30,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'Report not found' }, { status: 404 })
   }
 
+  // Task 13 — a row abandoned mid-flight by the platform (deploy/OOM/hard
+  // kill) never gets a second write; this is the read-time recovery for it.
+  run = withStaleProcessingRecovery(run)
+
   switch (run.status) {
     case 'processing':
       return NextResponse.json({ reportId: run.reportId, status: run.status })
@@ -39,7 +45,14 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       })
     case 'completed':
     case 'partial':
-      return NextResponse.json({ reportId: run.reportId, status: run.status, report: run.report })
+      // Task 19 — never return usage/warnings/raw provider error text or
+      // per-call cost to a public caller; report.raw_analysis in Supabase
+      // keeps the full data for debugging, this response does not.
+      return NextResponse.json({
+        reportId: run.reportId,
+        status: run.status,
+        report: run.report ? toPublicGraderReport(run.report) : null,
+      })
     default:
       return NextResponse.json({ error: 'Unknown report status' }, { status: 500 })
   }

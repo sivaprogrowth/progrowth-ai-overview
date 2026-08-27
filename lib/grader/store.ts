@@ -114,6 +114,30 @@ export async function graderRunExists(reportId: string): Promise<boolean> {
 }
 
 /**
+ * Count of runs created since `sinceIso` — the read behind the grader's
+ * daily spend/run guard (lib/grader/spend-guard.ts, Task 10). Uses a
+ * `head: true` count-only query (Supabase/PostgREST `Prefer: count=exact`)
+ * so this never pulls report rows over the wire just to count them.
+ *
+ * FAILS OPEN (returns 0) on a Supabase error rather than blocking every
+ * submission because the count query itself hiccuped — a transient
+ * counting failure should not become a full outage. This mirrors the
+ * documented trade-off, not an oversight; see spend-guard.ts.
+ */
+export async function countGraderRunsSince(sinceIso: string): Promise<number> {
+  const { count, error } = await supabase
+    .from(TABLE)
+    .select('id', { count: 'exact', head: true })
+    .gte('created_at', sinceIso)
+
+  if (error) {
+    console.error('[grader/store] countGraderRunsSince failed — failing open (treated as 0):', error.message)
+    return 0
+  }
+  return count ?? 0
+}
+
+/**
  * Attach captured lead details to an existing run (Phase 2, Task 26).
  * Deliberately does NOT touch `status`/`raw_analysis`/scores — this is an
  * additive write onto migrations/007's columns only.
