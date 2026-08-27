@@ -47,11 +47,18 @@ export interface AnalysisOutcome {
 const ANSWER_CONCURRENCY = 4
 
 /**
- * Wall-clock budget for the answer-engine fan-out. The runner route
- * (app/api/grader/run/route.ts) is configured with `maxDuration = 300`;
+ * Wall-clock budget for the answer-engine fan-out. POST /api/grader/analyze
+ * (app/api/grader/analyze/route.ts) is configured with `maxDuration = 300`;
  * this leaves ~70s of headroom for readiness checks, scoring, the summary
  * call and the Supabase write so the function always finishes and persists
  * a result instead of being killed mid-flight by the platform.
+ *
+ * That headroom assumes the optional GRADER_LLM_QUERIES / GRADER_LLM_SUMMARY
+ * enrichment calls stay OFF (the launch default) — each goes through a
+ * DataForSEO call with its own 90s worst-case timeout (see
+ * DFS_CALL_TIMEOUT_MS in lib/dataforseo.ts), which would eat into or exceed
+ * this buffer if ever turned on. Lower this constant first if either flag
+ * is enabled.
  */
 const ANSWER_DEADLINE_MS = 230_000
 
@@ -71,6 +78,18 @@ export async function runGraderAnalysis(input: NormalizedGraderInput): Promise<A
     { concurrency: ANSWER_CONCURRENCY, engines: GRADER_ENGINES, deadlineMs: ANSWER_DEADLINE_MS }
   )
 
+  // ── completed / partial / failed policy (Phase 3, Task 18) ──────────────
+  // failed:    not enough core analysis exists for a meaningful report —
+  //            the ONLY case is zero successful engine answers (nothing to
+  //            score, no queries to show, no citations to derive).
+  // partial:   core analysis succeeded (at least one usable answer) but a
+  //            secondary source/check failed — one engine call failed on
+  //            some query, readiness couldn't fully evaluate, or sentiment
+  //            couldn't classify anything. See the final status decision
+  //            below for the exact conditions.
+  // completed: core analysis succeeded AND every secondary check ran
+  //            cleanly. Every category above 'completed' in this list is a
+  //            successively broader definition of "still a real report."
   const succeeded = answers.filter((a) => a.error === null)
   if (succeeded.length === 0) {
     const sampleError = answers.find((a) => a.error)?.error ?? 'no answer engine returned a usable response'
@@ -161,6 +180,11 @@ export async function runGraderAnalysis(input: NormalizedGraderInput): Promise<A
     warnings,
   }
 
+  // partial when: any individual engine call failed on any query, OR
+  // readiness didn't fully evaluate, OR sentiment classification itself
+  // errored (not merely "found nothing to classify" — see
+  // lib/grader/sentiment.ts, analyzed === 0 is a normal, non-error
+  // outcome and does NOT trigger partial on its own).
   const failedAnswers = answers.length - succeeded.length
   const status: AnalysisOutcome['status'] =
     failedAnswers > 0 || readiness.status !== 'ok' || sentiment.error ? 'partial' : 'completed'

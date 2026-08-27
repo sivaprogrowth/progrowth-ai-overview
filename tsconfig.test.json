@@ -13,6 +13,6 @@
     "baseUrl": ".",
     "paths": { "@/*": ["./*"] }
   },
-  "include": ["lib/grader/**/*.ts", "lib/recommendations.ts", "lib/clientInput.ts", "tests/grader/**/*.ts"],
+  "include": ["lib/grader/**/*.ts", "lib/recommendations.ts", "lib/clientInput.ts", "middleware.ts", "tests/grader/**/*.ts"],
   "exclude": ["node_modules", ".next"]
 }
