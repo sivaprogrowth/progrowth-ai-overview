@@ -34,3 +34,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# grader test build output (tsc -p tsconfig.test.json)
+/.test-build
