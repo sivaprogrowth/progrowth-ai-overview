@@ -1,0 +1,99 @@
+/**
+ * ProGrowth AI Grader — design tokens.
+ *
+ * Derived from https://www.proelevate.ai/ (the confirmed design-system
+ * reference) by inspecting its actual computed styles — not guessed.
+ * Specifically sampled from the live site on 2026-08-27:
+ *   - page background, card surfaces, borders: computed getComputedStyle()
+ *     on the hero section, the "workspace" panel, and the six feature
+ *     cards (#101014 surface / #1e293b border / 12–16px radius repeats
+ *     across every card on the page — a real, consistent system, not a
+ *     one-off).
+ *   - accent gradient: the italic headline emphasis span uses
+ *     `background-clip: text` with `linear-gradient(#a78bfa, #7c3aed)`.
+ *   - primary CTA gradient: the header "Book a Demo" button's
+ *     `background-image`.
+ *   - fonts: computed `font-family` on <body> ("Plus Jakarta Sans") and
+ *     on headline emphasis spans ("Cormorant Garamond", italic).
+ *   - success token: proelevate.ai's own `:root { --success: 142.1 70.6%
+ *     45.3% }` (an HSL green very close to Tailwind's green-500).
+ * `--grader-warning`/`--grader-danger` are NOT sourced from the reference
+ * site (it has no error/warning UI to sample) — they're conventional
+ * amber/red semantic colors, documented here rather than left unexplained.
+ *
+ * Scoped to `.grader-theme` (applied once in app/grader/layout.tsx) so
+ * none of this touches the internal product's `--background`/`--foreground`
+ * tokens in app/globals.css.
+ */
+
+.grader-theme {
+  /* Surfaces */
+  --grader-bg: #07080d;
+  --grader-bg-elevated: #0a0a0b;
+  --grader-surface: #101014;
+  --grader-surface-elevated: #111114;
+  --grader-border: #1e293b;
+  --grader-border-muted: #334155;
+
+  /* Text */
+  --grader-foreground: #f8fafc;
+  --grader-muted-foreground: #94a3b8;
+  --grader-subtle-foreground: #cbd5e1;
+
+  /* Accent (violet-400 → violet-600, sampled from the headline gradient) */
+  --grader-accent: #7c3aed;
+  --grader-accent-soft: #a78bfa;
+  --grader-accent-gradient: linear-gradient(115deg, #a78bfa, #7c3aed);
+  --grader-primary-gradient: linear-gradient(
+    115deg,
+    #6d4aa8,
+    #4a2f7d 30%,
+    #2f1d54 65%,
+    #1c1230
+  );
+  --grader-glow: rgba(124, 58, 237, 0.35);
+  --grader-glow-soft: rgba(124, 58, 237, 0.16);
+
+  /* Status */
+  --grader-success: #22c55e;
+  --grader-warning: #f59e0b;
+  --grader-danger: #f87171;
+
+  /* Shape */
+  --grader-radius-card: 16px;
+  --grader-radius-control: 9999px;
+  --grader-radius-sm: 10px;
+
+  /* Type */
+  --grader-font-sans: var(--grader-font-jakarta), system-ui, -apple-system, sans-serif;
+  --grader-font-display: var(--grader-font-cormorant), Georgia, serif;
+
+  background: var(--grader-bg);
+  color: var(--grader-foreground);
+  font-family: var(--grader-font-sans);
+}
+
+.grader-theme ::selection {
+  background: var(--grader-accent);
+  color: #ffffff;
+}
+
+/* A soft ambient glow used sparingly behind hero/report score moments —
+   restrained (per Phase 2 direction: "subtle", not neon), so kept as an
+   opt-in utility rather than baked into every card. */
+.grader-glow-ambient {
+  background: radial-gradient(
+    circle at 50% 0%,
+    var(--grader-glow-soft),
+    transparent 60%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grader-theme * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
