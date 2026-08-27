@@ -133,7 +133,7 @@ export function PrimaryButton({
   }
   if (href) {
     return (
-      <a href={href} className={className} style={style}>
+      <a href={href} onClick={onClick} className={className} style={style}>
         {children}
       </a>
     )
@@ -165,7 +165,7 @@ export function SecondaryButton({
   }
   if (href) {
     return (
-      <a href={href} className={className} style={style}>
+      <a href={href} onClick={onClick} className={className} style={style}>
         {children}
       </a>
     )

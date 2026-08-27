@@ -13,7 +13,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { GraderReport, GraderRunStatus } from '@/lib/grader/types'
+import type { GraderRunStatus } from '@/lib/grader/types'
+import type { PublicGraderReport } from '@/lib/grader/public-report'
+import { trackGraderEvent } from '@/lib/grader/analytics'
 import { ScoreHero } from './ScoreHero'
 import { ScoreBreakdown } from './ScoreBreakdown'
 import { EngineVisibility } from './EngineVisibility'
@@ -32,7 +34,7 @@ type FetchOutcome =
   | { kind: 'invalid-id' }
   | { kind: 'not-found' }
   | { kind: 'server-error' }
-  | { kind: 'result'; status: GraderRunStatus; report: GraderReport | null; error: string | null }
+  | { kind: 'result'; status: GraderRunStatus; report: PublicGraderReport | null; error: string | null }
 
 const POLL_INTERVAL_MS = 4000
 const MAX_POLL_ATTEMPTS = 30 // ~2 minutes
@@ -94,6 +96,19 @@ export function ReportView({ reportId }: { reportId: string }) {
     }, POLL_INTERVAL_MS)
     return () => clearTimeout(timer)
   }, [outcome, load])
+
+  useEffect(() => {
+    if (outcome.kind !== 'result' || !outcome.report) return
+    if (outcome.status !== 'completed' && outcome.status !== 'partial') return
+    trackGraderEvent('grader_report_viewed', {
+      status: outcome.status,
+      score_band: outcome.report.score.grade,
+      engine_count: outcome.report.queries[0]?.enginesAnswered.length ?? 0,
+    })
+    // outcome only changes again while status === 'processing' (the poll
+    // effect above) — once it settles to completed/partial/failed it is
+    // stable, so this fires exactly once per loaded report.
+  }, [outcome])
 
   function handleUnlock() {
     writeUnlocked(reportId)

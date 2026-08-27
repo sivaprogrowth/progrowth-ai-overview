@@ -12,9 +12,10 @@
  * replaces POST /api/grader/analyze's own validation (Task 7).
  */
 
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { validateGraderForm, type GraderFormState } from '@/lib/grader/client-validate'
+import { trackGraderEvent } from '@/lib/grader/analytics'
 import { AnalysisState } from './AnalysisState'
 import { Card, PrimaryButton, SecondaryButton } from './ui'
 
@@ -40,6 +41,10 @@ export function GraderForm() {
   const [submitting, setSubmitting] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
 
+  useEffect(() => {
+    trackGraderEvent('grader_viewed')
+  }, [])
+
   function setField<K extends keyof FormState>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }))
     if (errors[key]) setErrors((e) => ({ ...e, [key]: undefined }))
@@ -53,6 +58,7 @@ export function GraderForm() {
 
     setFailure(null)
     setSubmitting(true)
+    trackGraderEvent('grader_submitted', { industry: form.industry.trim().slice(0, 60) })
 
     try {
       const res = await fetch('/api/grader/analyze', {
@@ -68,8 +74,19 @@ export function GraderForm() {
       })
 
       if (res.status === 429) {
+        // Two distinct server-side guards return 429 (rate limit and the
+        // duplicate-submission guard) — both already produce a safe,
+        // specific, public-facing message server-side, so it's shown
+        // as-is rather than replaced with one generic string.
+        const body = await res.json().catch(() => null)
         setSubmitting(false)
-        setFailure("You've run several reports recently. Please try again in a little while.")
+        setFailure(body?.error || "You've run several reports recently. Please try again in a little while.")
+        return
+      }
+
+      if (res.status === 503) {
+        setSubmitting(false)
+        setFailure("We're unable to run another analysis right now. Please try again later.")
         return
       }
 
@@ -93,6 +110,7 @@ export function GraderForm() {
       const data = await res.json()
 
       if (data.status === 'completed' || data.status === 'partial') {
+        trackGraderEvent(data.status === 'completed' ? 'grader_analysis_completed' : 'grader_analysis_partial')
         router.push(`/grader/report/${data.reportId}`)
         return
       }
@@ -100,9 +118,11 @@ export function GraderForm() {
       // status === 'failed' — the run persisted, but produced no usable
       // report. Stay on the form with a retry path rather than navigating
       // to a report page with nothing to show (Task 8).
+      trackGraderEvent('grader_analysis_failed')
       setSubmitting(false)
       setFailure("We couldn't complete this analysis. Nothing was charged, and no data was retained beyond this attempt. Please try again.")
     } catch {
+      trackGraderEvent('grader_analysis_failed', { reason: 'network' })
       setSubmitting(false)
       setFailure('We couldn’t reach the server. Please check your connection and try again.')
     }

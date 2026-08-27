@@ -1,9 +1,16 @@
+'use client'
+
 /**
  * Final CTA (Task 31). Links to the confirmed ProGrowth marketing domain —
  * the repo has no other booking/contact URL to reuse (checked: README only
- * references the internal tool's own login-gated subdomain).
+ * references the internal tool's own login-gated subdomain). Phase 3 asked
+ * to confirm this is the correct production conversion destination — it
+ * remains the answer confirmed at the start of Phase 2, since no
+ * dedicated /book-demo, /contact, or scheduling URL exists anywhere in
+ * this repo to prefer instead.
  */
 
+import { trackGraderEvent } from '@/lib/grader/analytics'
 import { PrimaryButton } from './ui'
 
 const PROGROWTH_URL = 'https://progrowth.services'
@@ -18,7 +25,9 @@ export function ReportCTA() {
           recommended across AI-powered search.
         </p>
         <div className="mt-8">
-          <PrimaryButton href={PROGROWTH_URL}>Talk to ProGrowth</PrimaryButton>
+          <PrimaryButton href={PROGROWTH_URL} onClick={() => trackGraderEvent('grader_cta_clicked')}>
+            Talk to ProGrowth
+          </PrimaryButton>
         </div>
       </div>
     </div>

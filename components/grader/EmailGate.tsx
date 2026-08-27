@@ -10,6 +10,7 @@
  */
 
 import { useState, type FormEvent } from 'react'
+import { trackGraderEvent } from '@/lib/grader/analytics'
 import { Card, PrimaryButton, SecondaryButton } from './ui'
 
 const TEASER_ITEMS = [
@@ -55,6 +56,7 @@ export function EmailGate({ reportId, onUnlock }: { reportId: string; onUnlock: 
         setSubmitting(false)
         return
       }
+      trackGraderEvent('grader_email_submitted')
       onUnlock()
     } catch {
       setServerError("We couldn't reach the server. Please check your connection and try again.")
