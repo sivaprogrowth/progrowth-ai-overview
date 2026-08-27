@@ -6,14 +6,13 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getGraderRun } from '@/lib/grader/store'
+import { isValidReportId } from '@/lib/grader/ids'
 
 export const runtime = 'nodejs'
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { id } = params
-  if (!UUID_RE.test(id)) {
+  if (!isValidReportId(id)) {
     return NextResponse.json({ error: 'Invalid report id' }, { status: 400 })
   }
 
