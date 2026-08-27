@@ -105,3 +105,30 @@ export async function getGraderRun(reportId: string): Promise<GraderRun | null> 
   if (error || !data) return null
   return rowToRun(data)
 }
+
+/** True when a report with this id exists — POST /api/grader/lead checks
+ *  this before writing so a lead can never be attached to a made-up id. */
+export async function graderRunExists(reportId: string): Promise<boolean> {
+  const { data, error } = await supabase.from(TABLE).select('id').eq('id', reportId).maybeSingle()
+  return !error && !!data
+}
+
+/**
+ * Attach captured lead details to an existing run (Phase 2, Task 26).
+ * Deliberately does NOT touch `status`/`raw_analysis`/scores — this is an
+ * additive write onto migrations/007's columns only.
+ */
+export async function saveGraderLead(reportId: string, name: string, email: string): Promise<void> {
+  const { error } = await supabase
+    .from(TABLE)
+    .update({
+      contact_name: name,
+      email,
+      email_captured_at: new Date().toISOString(),
+    })
+    .eq('id', reportId)
+
+  if (error) {
+    throw new Error(`Failed to save lead for report ${reportId}: ${error.message}`)
+  }
+}

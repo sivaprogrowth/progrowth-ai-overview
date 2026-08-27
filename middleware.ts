@@ -35,11 +35,15 @@ export async function middleware(req: NextRequest) {
   }
 
   // ProGrowth AI Grader — a separate, intentionally PUBLIC product surface.
-  // ONLY these two exact routes are exposed with no auth. This is a narrow
-  // allowlist, not a `/api/grader/` prefix match, so any future internal
-  // grader route (an admin view, a cost dashboard, …) stays behind the
-  // session/Bearer checks below by default.
-  if (pathname === '/api/grader/analyze' || pathname.startsWith('/api/grader/report/')) {
+  // ONLY these three exact routes are exposed with no auth. This is a
+  // narrow allowlist, not a `/api/grader/` prefix match, so any future
+  // internal grader route (an admin view, a cost dashboard, …) stays
+  // behind the session/Bearer checks below by default.
+  if (
+    pathname === '/api/grader/analyze' ||
+    pathname === '/api/grader/lead' ||
+    pathname.startsWith('/api/grader/report/')
+  ) {
     return NextResponse.next()
   }
 
