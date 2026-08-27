@@ -444,21 +444,36 @@ export interface ChatgptCompletion {
   cost: number
 }
 
-export async function fetchChatgptCompletion(
+/**
+ * Raw chat_gpt/llm_responses envelope. Same call as fetchChatgptCompletion
+ * below, but returns the untouched DataForSEO JSON so a caller that needs
+ * the citation `annotations` (not just the text) can parse them with the
+ * same shape perplexity/claude return. Added for the AI Grader, which needs
+ * cited URLs per answer; fetchChatgptCompletion now delegates here so both
+ * paths share one cap check and one cost log.
+ */
+export async function fetchChatgptLlmResponse(
   userPrompt: string,
   opts: { webSearch?: boolean; modelName?: string } = {}
-): Promise<ChatgptCompletion> {
+): Promise<any> {
   await assertUnderCap()
   // HARD LIMIT: this endpoint rejects user_prompt > ~500 chars with a
   // misleading task error 40501 "Invalid Field: 'user_prompt'" (verified
   // empirically: 500 OK, 550+ fails). Callers must keep prompts terse.
-  const json = await dfsPost('/ai_optimization/chat_gpt/llm_responses/live', [
+  return dfsPost('/ai_optimization/chat_gpt/llm_responses/live', [
     {
       user_prompt: userPrompt.slice(0, 500),
       model_name: opts.modelName ?? 'gpt-4o-mini',
       web_search: opts.webSearch ?? false,
     },
   ])
+}
+
+export async function fetchChatgptCompletion(
+  userPrompt: string,
+  opts: { webSearch?: boolean; modelName?: string } = {}
+): Promise<ChatgptCompletion> {
+  const json = await fetchChatgptLlmResponse(userPrompt, opts)
   const items = json?.tasks?.[0]?.result?.[0]?.items ?? []
   const parts: string[] = []
   for (const item of items) {
