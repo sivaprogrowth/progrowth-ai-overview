@@ -6,7 +6,9 @@ import { useEffect, useState } from 'react'
  * Compact logout control mounted in the global layout next to the
  * ClientSwitcher. Renders nothing until /api/auth/check confirms a session,
  * so it never shows on the login screen. Clicking clears the cookie via
- * /api/auth/logout and hard-reloads to '/', which drops back to LoginForm.
+ * /api/auth/logout and hard-reloads to '/dashboard', which drops back to
+ * LoginForm — the internal product's entry point moved from '/' to
+ * '/dashboard' so '/' could redirect to the public grader instead.
  */
 export default function LogoutButton() {
   const [authed, setAuthed] = useState(false)
@@ -29,7 +31,7 @@ export default function LogoutButton() {
       // Even if the request fails, fall through to a reload — the cookie is
       // httpOnly so we can't clear it client-side, but a reload re-checks auth.
     }
-    window.location.href = '/'
+    window.location.href = '/dashboard'
   }
 
   return (

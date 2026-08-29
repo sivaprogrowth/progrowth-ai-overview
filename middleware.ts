@@ -76,7 +76,14 @@ export async function middleware(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // For page routes, let the client-side handle showing login
+  // For page routes, let the client-side handle showing login. This is
+  // also why `/` needs no special case here to reach the public grader:
+  // page routes have always passed through middleware regardless of
+  // session (auth for pages is client-side, not middleware-enforced) —
+  // `app/page.tsx` itself does a server-side redirect('/grader'), and the
+  // internal product's own login/dashboard flow moved, unchanged, to
+  // `/dashboard` (still just as unprotected here, and just as gated by
+  // its own client-side session check as `/` used to be).
   return NextResponse.next()
 }
 

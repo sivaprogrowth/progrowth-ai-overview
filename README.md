@@ -49,7 +49,9 @@ Email OTP via Brevo → 6-digit code → HMAC-signed session cookie (30-day sess
 ## Routes
 
 **Pages**
-- `/` — main analyzer
+- `/` — redirects to `/grader` (the public ProGrowth AI Grader showcase)
+- `/grader`, `/grader/report/[id]` — public AI Grader (no auth — see `app/grader/`)
+- `/dashboard` — main analyzer (the internal product's entry point; moved here from `/` so `/` could be reserved for the public grader)
 - `/scorecard`, `/clients/[slug]/scorecard` — KPI scorecards
 - `/citation-network` — citation-network map (5 engines), cluster editor, tracked queries, re-run/generate triggers
 - `/clients`, `/clients/new`, `/clients/[slug]/edit` — tenant management + ICP setup

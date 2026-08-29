@@ -84,3 +84,15 @@ test('page routes pass through regardless of session (client-side gating)', asyn
   const res = await middleware(requestTo('/'))
   assert.equal(isPassThrough(res), true)
 })
+
+test('/grader and /grader/report/[id] pages pass through middleware with no auth', async () => {
+  for (const path of ['/grader', '/grader/report/11111111-1111-1111-1111-111111111111']) {
+    const res = await middleware(requestTo(path))
+    assert.equal(isPassThrough(res), true, `${path} should pass through`)
+  }
+})
+
+test('/dashboard (the relocated internal entry point) passes through middleware unauthenticated — its own client-side check gates it, same as `/` used to', async () => {
+  const res = await middleware(requestTo('/dashboard'))
+  assert.equal(isPassThrough(res), true)
+})
