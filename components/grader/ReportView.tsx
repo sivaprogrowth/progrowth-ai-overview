@@ -20,9 +20,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GraderRunStatus } from '@/lib/grader/types'
 import type { PublicGraderReport } from '@/lib/grader/public-report'
 import { trackGraderEvent } from '@/lib/grader/analytics'
+import { deriveEngineSummaries, engineComparisonSummary } from '@/lib/grader/format'
 import { ScoreHero } from './ScoreHero'
+import { MultiEngineScorecard } from './MultiEngineScorecard'
 import { ScoreBreakdown } from './ScoreBreakdown'
-import { EngineVisibility } from './EngineVisibility'
 import { CompetitorShare } from './CompetitorShare'
 import { QueryResults } from './QueryResults'
 import { CitationSources } from './CitationSources'
@@ -151,6 +152,8 @@ export function ReportView({ reportId }: { reportId: string }) {
     return <SimpleMessage title="This report has no data to show." body="Please try running a new analysis." showForm />
   }
 
+  const engineSummaries = deriveEngineSummaries(report.queries)
+
   return (
     <main>
       <ScoreHero company={report.company} score={report.score} summary={report.summary} />
@@ -164,12 +167,16 @@ export function ReportView({ reportId }: { reportId: string }) {
         </div>
       )}
 
-      <ReportSection eyebrow="Score Breakdown" title="How your score adds up">
-        <ScoreBreakdown categories={report.score.categories} />
+      <ReportSection
+        eyebrow="AI Engine Performance"
+        title="How Your Brand Performs Across AI Engines"
+        description={engineComparisonSummary(engineSummaries)}
+      >
+        <MultiEngineScorecard summaries={engineSummaries} />
       </ReportSection>
 
-      <ReportSection eyebrow="AI Presence" title="Your AI Presence">
-        <EngineVisibility queries={report.queries} />
+      <ReportSection eyebrow="Score Breakdown" title="How your score adds up">
+        <ScoreBreakdown categories={report.score.categories} />
       </ReportSection>
 
       <ReportSection eyebrow="Competitive Visibility" title="How You Compare">

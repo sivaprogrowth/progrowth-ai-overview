@@ -28,7 +28,14 @@ export function ScoreHero({
           <h1 className="mt-2 text-3xl font-extrabold sm:text-4xl">{company.companyName}</h1>
         </div>
 
-        <ScoreRing score={score.overall} grade={score.grade} size={220} />
+        <ScoreRing
+          percent={score.overall}
+          tone={gradeTone(score.grade)}
+          size={220}
+          primaryText={String(Math.round(score.overall))}
+          secondaryText="/ 100"
+          ariaLabel={`AI visibility score: ${Math.round(score.overall)} out of 100, ${score.grade}`}
+        />
 
         <Pill tone={gradeTone(score.grade)}>{score.grade}</Pill>
 

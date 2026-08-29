@@ -115,47 +115,180 @@ export function presenceTone(label: PresenceLabel): 'success' | 'warning' | 'dan
   }
 }
 
-export interface EnginePresence {
+// ── Multi-engine scorecard (report top section) ─────────────────────────
+//
+// EngineSummary/deriveEngineSummaries supersedes the old EnginePresence/
+// aggregateEnginePresence (Phase 2) — same pure-counting philosophy, but
+// covers a full engine failure too. The old function only ever produced a
+// row for an engine with at least one SUCCESSFUL answer, so an engine that
+// failed on every single query silently vanished from the UI instead of
+// showing an "unavailable" state (Task 21/22's explicit requirement). This
+// tracks `attemptedCount` — every (query, engine) pair this engine was
+// asked, success or failure — separately from `answeredCount`, so a fully
+// failed engine still gets a row with `available: false`.
+//
+// Every field here is either a straight count/sum/mean over already-
+// returned EngineAnswer data, or a formula ALREADY used server-side at the
+// overall level (citationCoveragePercent mirrors the exact ratio
+// lib/grader/scoring.ts's citation-authority category computes, just
+// grouped per engine instead of across all engines combined). None of this
+// is a new scoring model — there is deliberately no per-engine "score out
+// of 100" anywhere here, because the backend does not compute one (Task 6
+// of the multi-engine scorecard brief: prefer honest factual metrics over
+// an invented composite score).
+
+export interface EngineSummary {
   engine: GraderEngine
-  mentionedCount: number
+  /** Every (query, engine) pair attempted, success or failure. */
+  attemptedCount: number
+  /** Pairs that returned a usable answer. */
   answeredCount: number
+  mentionedCount: number
+  /** 0–100, mentionedCount/answeredCount — the multi-engine ring's fill. 0 when unavailable. */
+  mentionRate: number
   label: PresenceLabel
+  /** True once at least one answer succeeded — false renders the "unavailable" state. */
+  available: boolean
+  /** Mean of the non-null brandPosition values across this engine's answers; null if never cited. */
+  avgPosition: number | null
+  /** % of this engine's answered queries that carried ≥1 citation; null if unavailable. */
+  citationCoveragePercent: number | null
+  /** Distinct competitor names this engine named anywhere. */
+  uniqueCompetitors: number
+  /** Distinct domains this engine cited anywhere. */
+  uniqueCitationDomains: number
 }
 
+const ENGINE_ORDER: GraderEngine[] = ['chatgpt', 'perplexity', 'claude']
+
 /**
- * Group the already-returned per-query, per-engine answers (Phase 1's
- * `QueryAnalysisResult.per`) into one row per engine. Pure counting over
- * data the backend already computed — no new score, no weighting, exactly
- * the "simple UI transformation" Task 16 permits. Always returns a row for
- * every engine that answered at least one query, in the fixed engine order
- * (chatgpt, perplexity, claude) rather than the order they happen to
- * appear in the data, so the UI is stable across reports.
+ * One row per engine that was actually queried in this report (Task 3: no
+ * unsupported/unattempted engine ever appears), in the fixed
+ * chatgpt/perplexity/claude order regardless of data order, so the UI is
+ * stable across reports.
  */
-export function aggregateEnginePresence(queries: QueryAnalysisResult[]): EnginePresence[] {
-  const order: GraderEngine[] = ['chatgpt', 'perplexity', 'claude']
-  const counts = new Map<GraderEngine, { mentioned: number; answered: number }>()
+export function deriveEngineSummaries(queries: QueryAnalysisResult[]): EngineSummary[] {
+  interface Acc {
+    attempted: number
+    answered: number
+    mentioned: number
+    positions: number[]
+    withCitation: number
+    competitors: Set<string>
+    citationDomains: Set<string>
+  }
+  const acc = new Map<GraderEngine, Acc>()
+  const empty = (): Acc => ({
+    attempted: 0,
+    answered: 0,
+    mentioned: 0,
+    positions: [],
+    withCitation: 0,
+    competitors: new Set(),
+    citationDomains: new Set(),
+  })
 
   for (const query of queries) {
     for (const answer of query.per) {
-      if (answer.error !== null) continue
-      const entry = counts.get(answer.engine) ?? { mentioned: 0, answered: 0 }
-      entry.answered += 1
-      if (answer.brandMentioned) entry.mentioned += 1
-      counts.set(answer.engine, entry)
+      const entry = acc.get(answer.engine) ?? empty()
+      entry.attempted += 1
+      if (answer.error === null) {
+        entry.answered += 1
+        if (answer.brandMentioned) entry.mentioned += 1
+        if (answer.brandPosition !== null) entry.positions.push(answer.brandPosition)
+        if (answer.citations.length > 0) entry.withCitation += 1
+        for (const c of answer.competitors) entry.competitors.add(normalizeCompetitorKey(c))
+        for (const c of answer.citations) entry.citationDomains.add(c.domain)
+      }
+      acc.set(answer.engine, entry)
     }
   }
 
-  return order
-    .filter((engine) => counts.has(engine))
-    .map((engine) => {
-      const c = counts.get(engine)!
-      return {
-        engine,
-        mentionedCount: c.mentioned,
-        answeredCount: c.answered,
-        label: presenceLabel(c.mentioned, c.answered),
-      }
-    })
+  return ENGINE_ORDER.filter((engine) => acc.has(engine)).map((engine) => {
+    const a = acc.get(engine)!
+    const available = a.answered > 0
+    const mentionRate = available ? (a.mentioned / a.answered) * 100 : 0
+    return {
+      engine,
+      attemptedCount: a.attempted,
+      answeredCount: a.answered,
+      mentionedCount: a.mentioned,
+      mentionRate: round1(mentionRate),
+      label: presenceLabel(a.mentioned, a.answered),
+      available,
+      avgPosition: a.positions.length > 0 ? round1(a.positions.reduce((s, p) => s + p, 0) / a.positions.length) : null,
+      citationCoveragePercent: available ? round1((a.withCitation / a.answered) * 100) : null,
+      uniqueCompetitors: a.competitors.size,
+      uniqueCitationDomains: a.citationDomains.size,
+    }
+  })
+}
+
+function normalizeCompetitorKey(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+/** Round to one decimal place — mirrors lib/grader/grade.ts's round1 without importing a server-only module. */
+function round1(n: number): number {
+  return Math.round(n * 10) / 10
+}
+
+/** Short, static descriptive tagline per engine — copy only, never data-driven. */
+const ENGINE_TAGLINES: Record<GraderEngine, string> = {
+  chatgpt: 'AI Answer Visibility',
+  perplexity: 'Real-Time AI Answers',
+  claude: 'Conversational AI Visibility',
+}
+
+export function engineTagline(engine: GraderEngine): string {
+  return ENGINE_TAGLINES[engine]
+}
+
+/**
+ * One deterministic, data-driven sentence per engine card (Task 9). No LLM
+ * call, no new copy generation — a fixed template selected by `label`/
+ * `available`, with the one real number (competitor count) it can safely
+ * cite inline.
+ */
+export function engineInterpretation(summary: EngineSummary): string {
+  if (!summary.available) {
+    return "We couldn't retrieve enough verified data from this engine during this analysis."
+  }
+  switch (summary.label) {
+    case 'Strong':
+      return "Your brand appears consistently across this engine's analyzed prompts."
+    case 'Moderate':
+      return summary.uniqueCompetitors > 0
+        ? `You have some visibility here, but ${summary.uniqueCompetitors} other brand${summary.uniqueCompetitors === 1 ? '' : 's'} also surface regularly across these prompts.`
+        : 'You have some visibility here, with room to appear more consistently across these prompts.'
+    case 'Weak':
+      return summary.uniqueCompetitors > 0
+        ? `Your brand is rarely surfaced by this engine — ${summary.uniqueCompetitors} other brand${summary.uniqueCompetitors === 1 ? '' : 's'} appear more often across the analyzed prompts.`
+        : 'Your brand is rarely surfaced by this engine in the analyzed prompts.'
+    case 'Not Mentioned':
+      return 'This engine did not surface your brand in any analyzed prompt.'
+  }
+}
+
+/**
+ * One short, comparative headline across every engine (the "quick overall
+ * interpretation" that sits directly under the scorecard's heading) — a
+ * plain min/max comparison over `mentionRate`, nothing more. Falls back to
+ * a neutral line when there's nothing meaningful to compare (0 or 1
+ * available engine, or every available engine tied).
+ */
+export function engineComparisonSummary(summaries: EngineSummary[]): string {
+  const available = summaries.filter((s) => s.available)
+  if (available.length < 2) {
+    return 'How your brand performs across the AI answer engines analyzed.'
+  }
+  const sorted = [...available].sort((a, b) => b.mentionRate - a.mentionRate)
+  const best = sorted[0]
+  const worst = sorted[sorted.length - 1]
+  if (best.mentionRate === worst.mentionRate) {
+    return 'Your brand shows a similar level of visibility across every AI engine analyzed.'
+  }
+  return `Your brand performs best on ${engineLabel(best.engine)} and has the most room to grow on ${engineLabel(worst.engine)}.`
 }
 
 // ── Readiness (Task 22) ──────────────────────────────────────────────────

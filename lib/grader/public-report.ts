@@ -18,8 +18,9 @@
  * lib/grader returns nothing outside this file's own doc comments), so
  * they are dropped entirely rather than redacted-in-place.
  * `per[].error`'s *presence* (null vs non-null) DOES drive frontend logic
- * (lib/grader/format.ts's aggregateEnginePresence excludes failed calls),
- * so it is replaced with a fixed generic string rather than removed.
+ * (lib/grader/format.ts's deriveEngineSummaries excludes failed calls from
+ * its per-engine counts), so it is replaced with a fixed generic string
+ * rather than removed.
  *
  * Pure, dependency-free (no Supabase import) — safe to unit test in
  * isolation, and safe to call from both the report route and, if ever

@@ -14,7 +14,11 @@ import {
   readinessTone,
   sourceTypeLabel,
   wrappableDomain,
-  aggregateEnginePresence,
+  deriveEngineSummaries,
+  engineTagline,
+  engineInterpretation,
+  engineComparisonSummary,
+  type EngineSummary,
 } from '../../lib/grader/format'
 import type { EngineAnswer, QueryAnalysisResult } from '../../lib/grader/types'
 
@@ -129,40 +133,178 @@ function query(per: EngineAnswer[]): QueryAnalysisResult {
   }
 }
 
-test('aggregateEnginePresence counts per engine, excluding failed calls', () => {
+// ── deriveEngineSummaries / engineTagline / engineInterpretation /
+//    engineComparisonSummary (multi-engine scorecard) ─────────────────────
+
+test('deriveEngineSummaries: 3 engines, all successful, in fixed stable order', () => {
   const queries = [
     query([
-      answer({ engine: 'chatgpt', brandMentioned: true }),
+      answer({ engine: 'chatgpt', brandMentioned: true, brandPosition: 1, citations: [{ domain: 'g2.com', url: 'https://g2.com', title: null }] }),
+      answer({ engine: 'claude', brandMentioned: true }),
       answer({ engine: 'perplexity', brandMentioned: false }),
-      answer({ engine: 'claude', error: 'timeout' }),
-    ]),
-    query([
-      answer({ engine: 'chatgpt', brandMentioned: false }),
-      answer({ engine: 'perplexity', brandMentioned: true }),
     ]),
   ]
-  const rows = aggregateEnginePresence(queries)
-  const chatgpt = rows.find((r) => r.engine === 'chatgpt')!
-  const perplexity = rows.find((r) => r.engine === 'perplexity')!
-  const claude = rows.find((r) => r.engine === 'claude')
+  const rows = deriveEngineSummaries(queries)
+  assert.deepEqual(rows.map((r) => r.engine), ['chatgpt', 'perplexity', 'claude'])
+  assert.equal(rows.every((r) => r.available), true)
+})
 
+test('deriveEngineSummaries: 2 engines — a third engine never attempted does not appear', () => {
+  const queries = [query([answer({ engine: 'chatgpt', brandMentioned: true }), answer({ engine: 'perplexity', brandMentioned: false })])]
+  const rows = deriveEngineSummaries(queries)
+  assert.deepEqual(rows.map((r) => r.engine), ['chatgpt', 'perplexity'])
+})
+
+test('deriveEngineSummaries: 1 engine — only that engine appears', () => {
+  const queries = [query([answer({ engine: 'claude', brandMentioned: true })])]
+  const rows = deriveEngineSummaries(queries)
+  assert.deepEqual(rows.map((r) => r.engine), ['claude'])
+})
+
+test('deriveEngineSummaries: an engine that errored on EVERY call still appears, marked unavailable', () => {
+  const queries = [
+    query([answer({ engine: 'chatgpt', brandMentioned: true }), answer({ engine: 'claude', error: 'timeout' })]),
+    query([answer({ engine: 'chatgpt', brandMentioned: true }), answer({ engine: 'claude', error: 'timeout' })]),
+  ]
+  const rows = deriveEngineSummaries(queries)
+  const claude = rows.find((r) => r.engine === 'claude')!
+  assert.ok(claude, 'a fully-failed engine must still get a row, not be silently omitted')
+  assert.equal(claude.available, false)
+  assert.equal(claude.answeredCount, 0)
+  assert.equal(claude.attemptedCount, 2)
+  assert.equal(claude.mentionRate, 0)
+})
+
+test('deriveEngineSummaries: partial report — engine with SOME failed calls still counts only the successes', () => {
+  const queries = [
+    query([answer({ engine: 'chatgpt', brandMentioned: true })]),
+    query([answer({ engine: 'chatgpt', error: 'provider unavailable' })]),
+    query([answer({ engine: 'chatgpt', brandMentioned: false })]),
+  ]
+  const rows = deriveEngineSummaries(queries)
+  const chatgpt = rows[0]
+  assert.equal(chatgpt.available, true)
+  assert.equal(chatgpt.attemptedCount, 3)
   assert.equal(chatgpt.answeredCount, 2)
   assert.equal(chatgpt.mentionedCount, 1)
-  assert.equal(perplexity.answeredCount, 2)
-  assert.equal(perplexity.mentionedCount, 1)
-  // claude only ever errored — zero successful answers, so it should not
-  // appear as a row at all (nothing to report).
-  assert.equal(claude, undefined)
 })
 
-test('aggregateEnginePresence returns rows in a fixed, stable engine order', () => {
+test('deriveEngineSummaries: no citation data at all yields 0% coverage, not null, for an available engine', () => {
+  const queries = [query([answer({ engine: 'chatgpt', brandMentioned: true, citations: [] })])]
+  const rows = deriveEngineSummaries(queries)
+  assert.equal(rows[0].citationCoveragePercent, 0)
+  assert.equal(rows[0].uniqueCitationDomains, 0)
+})
+
+test('deriveEngineSummaries: no competitor data at all yields 0 unique competitors', () => {
+  const queries = [query([answer({ engine: 'chatgpt', brandMentioned: true, competitors: [] })])]
+  const rows = deriveEngineSummaries(queries)
+  assert.equal(rows[0].uniqueCompetitors, 0)
+})
+
+test('deriveEngineSummaries: competitor names are de-duplicated case/whitespace-insensitively', () => {
   const queries = [
-    query([answer({ engine: 'claude', brandMentioned: true }), answer({ engine: 'chatgpt', brandMentioned: true })]),
+    query([
+      answer({ engine: 'chatgpt', competitors: ['Acme Corp', ' acme corp ', 'Beta Inc'] }),
+    ]),
   ]
-  const rows = aggregateEnginePresence(queries)
-  assert.deepEqual(rows.map((r) => r.engine), ['chatgpt', 'claude'])
+  const rows = deriveEngineSummaries(queries)
+  assert.equal(rows[0].uniqueCompetitors, 2)
 })
 
-test('aggregateEnginePresence returns an empty array when nothing answered', () => {
-  assert.deepEqual(aggregateEnginePresence([query([])]), [])
+test('deriveEngineSummaries: a strong engine (high mention rate) gets label Strong', () => {
+  const queries = Array.from({ length: 10 }, () => query([answer({ engine: 'chatgpt', brandMentioned: true })]))
+  const rows = deriveEngineSummaries(queries)
+  assert.equal(rows[0].label, 'Strong')
+  assert.equal(rows[0].mentionRate, 100)
+})
+
+test('deriveEngineSummaries: a weak engine (low mention rate) gets label Weak, not Not Mentioned', () => {
+  const queries = [
+    ...Array.from({ length: 1 }, () => query([answer({ engine: 'chatgpt', brandMentioned: true })])),
+    ...Array.from({ length: 9 }, () => query([answer({ engine: 'chatgpt', brandMentioned: false })])),
+  ]
+  const rows = deriveEngineSummaries(queries)
+  assert.equal(rows[0].label, 'Weak')
+})
+
+test('deriveEngineSummaries: average position is the mean of only the non-null positions', () => {
+  const queries = [
+    query([answer({ engine: 'chatgpt', brandMentioned: true, brandPosition: 1 })]),
+    query([answer({ engine: 'chatgpt', brandMentioned: true, brandPosition: 3 })]),
+    query([answer({ engine: 'chatgpt', brandMentioned: true, brandPosition: null })]),
+  ]
+  const rows = deriveEngineSummaries(queries)
+  assert.equal(rows[0].avgPosition, 2)
+})
+
+test('deriveEngineSummaries: average position is null when the brand was never cited by this engine', () => {
+  const queries = [query([answer({ engine: 'chatgpt', brandMentioned: true, brandPosition: null })])]
+  const rows = deriveEngineSummaries(queries)
+  assert.equal(rows[0].avgPosition, null)
+})
+
+test('deriveEngineSummaries: returns an empty array when nothing was ever attempted', () => {
+  assert.deepEqual(deriveEngineSummaries([query([])]), [])
+})
+
+test('engineTagline covers every supported engine with non-empty copy', () => {
+  for (const engine of ['chatgpt', 'perplexity', 'claude'] as const) {
+    assert.ok(engineTagline(engine).length > 0)
+  }
+})
+
+function summary(overrides: Partial<EngineSummary>): EngineSummary {
+  return {
+    engine: 'chatgpt',
+    attemptedCount: 10,
+    answeredCount: 10,
+    mentionedCount: 0,
+    mentionRate: 0,
+    label: 'Not Mentioned',
+    available: true,
+    avgPosition: null,
+    citationCoveragePercent: 0,
+    uniqueCompetitors: 0,
+    uniqueCitationDomains: 0,
+    ...overrides,
+  }
+}
+
+test('engineInterpretation never claims data exists for an unavailable engine', () => {
+  const text = engineInterpretation(summary({ available: false }))
+  assert.match(text, /couldn't retrieve/i)
+})
+
+test('engineInterpretation for Strong/Weak/Not Mentioned is distinct, deterministic text', () => {
+  const strong = engineInterpretation(summary({ label: 'Strong' }))
+  const weak = engineInterpretation(summary({ label: 'Weak', uniqueCompetitors: 2 }))
+  const none = engineInterpretation(summary({ label: 'Not Mentioned' }))
+  assert.notEqual(strong, weak)
+  assert.notEqual(weak, none)
+  assert.match(weak, /2 other brands/)
+})
+
+test('engineComparisonSummary falls back to a neutral line with fewer than 2 available engines', () => {
+  assert.doesNotThrow(() => engineComparisonSummary([]))
+  assert.doesNotThrow(() => engineComparisonSummary([summary({})]))
+  const text = engineComparisonSummary([summary({ available: false })])
+  assert.ok(text.length > 0)
+})
+
+test('engineComparisonSummary names the best and worst engine by mention rate', () => {
+  const text = engineComparisonSummary([
+    summary({ engine: 'chatgpt', mentionRate: 90 }),
+    summary({ engine: 'claude', mentionRate: 10 }),
+  ])
+  assert.match(text, /ChatGPT/)
+  assert.match(text, /Claude/)
+})
+
+test('engineComparisonSummary reports a tie without naming a false winner', () => {
+  const text = engineComparisonSummary([
+    summary({ engine: 'chatgpt', mentionRate: 50 }),
+    summary({ engine: 'claude', mentionRate: 50 }),
+  ])
+  assert.match(text, /similar/i)
 })

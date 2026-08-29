@@ -36,8 +36,8 @@ test('every report section renders unconditionally in ReportView.tsx (not behind
   // "unlocked" branch, which would make one of these appear twice or not
   // at all outside a conditional.
   const sections = [
+    '<MultiEngineScorecard',
     '<ScoreBreakdown',
-    '<EngineVisibility',
     '<CompetitorShare',
     '<QueryResults',
     '<CitationSources',
