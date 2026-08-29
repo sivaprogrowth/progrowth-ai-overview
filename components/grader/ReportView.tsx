@@ -1,10 +1,14 @@
 'use client'
 
 /**
- * Top-level report orchestrator (Tasks 11–12, 28). Fetches
+ * Top-level report orchestrator (Tasks 11–12). Fetches
  * GET /api/grader/report/[id], handles every documented status
  * (processing/completed/partial/failed) plus not-found/invalid-id/network
- * failure, and gates the detailed sections behind lead capture.
+ * failure, and renders the full report immediately with no email/name
+ * requirement and no locked sections. A completed/partial report shows
+ * every section as soon as it loads; opening the same URL again (refresh,
+ * new tab, a shared link) shows the same full report every time, since
+ * nothing about visibility depends on anything stored client-side.
  *
  * The Phase 1 API is synchronous today, so `processing` should be rare —
  * but this still polls on that status (bounded, with a manual-refresh
@@ -24,7 +28,6 @@ import { QueryResults } from './QueryResults'
 import { CitationSources } from './CitationSources'
 import { ReadinessChecklist } from './ReadinessChecklist'
 import { Recommendations } from './Recommendations'
-import { EmailGate } from './EmailGate'
 import { ReportCTA } from './ReportCTA'
 import { ReportSection, Pill, SecondaryButton } from './ui'
 
@@ -39,35 +42,9 @@ type FetchOutcome =
 const POLL_INTERVAL_MS = 4000
 const MAX_POLL_ATTEMPTS = 30 // ~2 minutes
 
-function unlockKey(reportId: string): string {
-  return `grader-unlocked-${reportId}`
-}
-
-function readUnlocked(reportId: string): boolean {
-  try {
-    return typeof window !== 'undefined' && window.localStorage.getItem(unlockKey(reportId)) === '1'
-  } catch {
-    return false
-  }
-}
-
-function writeUnlocked(reportId: string): void {
-  try {
-    window.localStorage.setItem(unlockKey(reportId), '1')
-  } catch {
-    // Private browsing / storage disabled — the unlock still holds for the
-    // rest of this session via React state, it just won't persist.
-  }
-}
-
 export function ReportView({ reportId }: { reportId: string }) {
   const [outcome, setOutcome] = useState<FetchOutcome>({ kind: 'loading' })
-  const [unlocked, setUnlocked] = useState(false)
   const attemptsRef = useRef(0)
-
-  useEffect(() => {
-    setUnlocked(readUnlocked(reportId))
-  }, [reportId])
 
   const load = useCallback(async () => {
     try {
@@ -109,11 +86,6 @@ export function ReportView({ reportId }: { reportId: string }) {
     // effect above) — once it settles to completed/partial/failed it is
     // stable, so this fires exactly once per loaded report.
   }, [outcome])
-
-  function handleUnlock() {
-    writeUnlocked(reportId)
-    setUnlocked(true)
-  }
 
   if (outcome.kind === 'loading') {
     return <ReportSkeleton />
@@ -192,41 +164,35 @@ export function ReportView({ reportId }: { reportId: string }) {
         </div>
       )}
 
-      {!unlocked ? (
-        <EmailGate reportId={reportId} onUnlock={handleUnlock} />
-      ) : (
-        <>
-          <ReportSection eyebrow="Score Breakdown" title="How your score adds up">
-            <ScoreBreakdown categories={report.score.categories} />
-          </ReportSection>
+      <ReportSection eyebrow="Score Breakdown" title="How your score adds up">
+        <ScoreBreakdown categories={report.score.categories} />
+      </ReportSection>
 
-          <ReportSection eyebrow="AI Presence" title="Your AI Presence">
-            <EngineVisibility queries={report.queries} />
-          </ReportSection>
+      <ReportSection eyebrow="AI Presence" title="Your AI Presence">
+        <EngineVisibility queries={report.queries} />
+      </ReportSection>
 
-          <ReportSection eyebrow="Competitive Visibility" title="How You Compare">
-            <CompetitorShare companyName={report.company.companyName} competitors={report.competitors} />
-          </ReportSection>
+      <ReportSection eyebrow="Competitive Visibility" title="How You Compare">
+        <CompetitorShare companyName={report.company.companyName} competitors={report.competitors} />
+      </ReportSection>
 
-          <ReportSection eyebrow="Query-Level Results" title="Questions That Matter">
-            <QueryResults queries={report.queries} />
-          </ReportSection>
+      <ReportSection eyebrow="Query-Level Results" title="Questions That Matter">
+        <QueryResults queries={report.queries} />
+      </ReportSection>
 
-          <ReportSection eyebrow="Citation Sources" title="Where AI Gets Information">
-            <CitationSources citations={report.citations} domain={report.company.domain} />
-          </ReportSection>
+      <ReportSection eyebrow="Citation Sources" title="Where AI Gets Information">
+        <CitationSources citations={report.citations} domain={report.company.domain} />
+      </ReportSection>
 
-          <ReportSection eyebrow="AI Readiness" title="AI Readiness">
-            <ReadinessChecklist readiness={report.readiness} />
-          </ReportSection>
+      <ReportSection eyebrow="AI Readiness" title="AI Readiness">
+        <ReadinessChecklist readiness={report.readiness} />
+      </ReportSection>
 
-          <ReportSection eyebrow="Priority Opportunities" title="Top Opportunities">
-            <Recommendations recommendations={report.recommendations} />
-          </ReportSection>
+      <ReportSection eyebrow="Priority Opportunities" title="Top Opportunities">
+        <Recommendations recommendations={report.recommendations} />
+      </ReportSection>
 
-          <ReportCTA />
-        </>
-      )}
+      <ReportCTA />
     </main>
   )
 }
