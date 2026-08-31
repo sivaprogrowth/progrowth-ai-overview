@@ -27,12 +27,12 @@
  */
 
 import { instructsDebunkedTactic } from '../recommendations'
+import { getGraderQueryCount, MAX_QUERIES, MIN_QUERIES } from './query-count'
 import type { GeneratedQuery, NormalizedGraderInput, QueryCategory } from './types'
 
-/** Hard ceiling on generated queries — the public cost/latency bound. */
-export const MAX_QUERIES = 12
-/** Below this the report is not worth producing. */
-export const MIN_QUERIES = 8
+/** Re-exported for backward compatibility — see lib/grader/query-count.ts,
+ *  which now owns these bounds (avoids a circular import with this file). */
+export { MAX_QUERIES, MIN_QUERIES }
 /** Most extra queries the optional LLM call may contribute. */
 export const MAX_LLM_QUERIES = 3
 
@@ -42,10 +42,21 @@ function titleish(s: string): string {
 
 /**
  * Deterministic template set. Pure — no I/O, no randomness, no Date.
- * Ordering is category round-robin so truncating at MAX_QUERIES can never
- * starve a category.
+ * Ordering is category round-robin so truncating at `targetCount` can
+ * never starve a category down to zero — though it CAN produce an uneven
+ * split across categories when `targetCount` isn't a multiple of the
+ * category count (4): 12 and 8 both split evenly (3/3/3/3 and 2/2/2/2);
+ * 10 does not (3/3/2/2, favoring the two high-priority categories at the
+ * expense of the two medium-priority ones — see lib/grader/query-count.ts
+ * for why that specific unevenness mattered in the Phase 2 measurements).
+ *
+ * `targetCount` defaults to MAX_QUERIES (12) so any existing caller that
+ * doesn't pass one keeps getting today's full template set unchanged.
  */
-export function generateTemplateQueries(input: NormalizedGraderInput): GeneratedQuery[] {
+export function generateTemplateQueries(
+  input: NormalizedGraderInput,
+  targetCount: number = MAX_QUERIES
+): GeneratedQuery[] {
   const company = titleish(input.companyName)
   const industry = titleish(input.industry)
   const service = input.service ? titleish(input.service) : industry
@@ -106,7 +117,7 @@ export function generateTemplateQueries(input: NormalizedGraderInput): Generated
     }
   }
 
-  return out.slice(0, MAX_QUERIES)
+  return out.slice(0, targetCount)
 }
 
 /**
@@ -193,18 +204,20 @@ export async function generateLlmQueries(
 
 /**
  * Full query plan: deterministic templates, optionally topped up by the LLM,
- * always capped at MAX_QUERIES.
+ * always capped at the configured target count (lib/grader/query-count.ts —
+ * 8 by default as of Phase 2, was a flat 12 before).
  */
 export async function generateQueries(
   input: NormalizedGraderInput
 ): Promise<{ queries: GeneratedQuery[]; cost: number; calls: number; warning: string | null }> {
-  const templates = generateTemplateQueries(input)
-  if (templates.length >= MAX_QUERIES) {
+  const targetCount = getGraderQueryCount()
+  const templates = generateTemplateQueries(input, targetCount)
+  if (templates.length >= targetCount) {
     return { queries: templates, cost: 0, calls: 0, warning: null }
   }
 
   const extra = await generateLlmQueries(input, templates)
-  const queries = [...templates, ...extra.queries].slice(0, MAX_QUERIES)
+  const queries = [...templates, ...extra.queries].slice(0, targetCount)
   return {
     queries,
     cost: extra.cost,

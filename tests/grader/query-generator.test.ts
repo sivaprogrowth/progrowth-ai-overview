@@ -88,3 +88,68 @@ test('generateQueries never touches the network when GRADER_LLM_QUERIES is unset
   assert.equal(result.warning, null)
   assert.ok(result.queries.length <= MAX_QUERIES)
 })
+
+// Phase 2: query-count is now configurable (lib/grader/query-count.ts).
+// These lock in the exact category split at each size, since that split —
+// not just the raw count — is what the Phase 2 report's recommendation
+// (8, not 10) actually rests on.
+
+function categoryCounts(queries: { category: string }[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const q of queries) counts[q.category] = (counts[q.category] ?? 0) + 1
+  return counts
+}
+
+test('generateTemplateQueries(targetCount=8) splits evenly 2/2/2/2 across all four categories', () => {
+  const queries = generateTemplateQueries(input, 8)
+  assert.equal(queries.length, 8)
+  assert.deepEqual(categoryCounts(queries), {
+    category_discovery: 2,
+    recommendation_intent: 2,
+    brand_evaluation: 2,
+    alternatives_comparison: 2,
+  })
+})
+
+test('generateTemplateQueries(targetCount=10) splits unevenly 3/3/2/2 (high-priority categories favored)', () => {
+  const queries = generateTemplateQueries(input, 10)
+  assert.equal(queries.length, 10)
+  assert.deepEqual(categoryCounts(queries), {
+    category_discovery: 3,
+    recommendation_intent: 3,
+    brand_evaluation: 2,
+    alternatives_comparison: 2,
+  })
+})
+
+test('generateTemplateQueries(targetCount=12) matches the original flat 3/3/3/3 split', () => {
+  const queries = generateTemplateQueries(input, 12)
+  assert.equal(queries.length, 12)
+  assert.deepEqual(categoryCounts(queries), {
+    category_discovery: 3,
+    recommendation_intent: 3,
+    brand_evaluation: 3,
+    alternatives_comparison: 3,
+  })
+})
+
+test("generateTemplateQueries's first N queries are a stable prefix regardless of targetCount", () => {
+  const eight = generateTemplateQueries(input, 8)
+  const twelve = generateTemplateQueries(input, 12)
+  assert.deepEqual(twelve.slice(0, 8), eight)
+})
+
+test('generateQueries respects GRADER_QUERY_COUNT', async () => {
+  delete process.env.GRADER_LLM_QUERIES
+  process.env.GRADER_QUERY_COUNT = '10'
+  const result = await generateQueries(input)
+  assert.equal(result.queries.length, 10)
+  delete process.env.GRADER_QUERY_COUNT
+})
+
+test('generateQueries defaults to 8 queries when GRADER_QUERY_COUNT is unset', async () => {
+  delete process.env.GRADER_LLM_QUERIES
+  delete process.env.GRADER_QUERY_COUNT
+  const result = await generateQueries(input)
+  assert.equal(result.queries.length, 8)
+})
