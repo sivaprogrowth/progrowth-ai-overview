@@ -105,3 +105,21 @@ test('engine-level timing stats are logged but never attached to the persisted/p
   const publicReportSource = read('lib/grader/public-report.ts')
   assert.doesNotMatch(publicReportSource, /engineStats|EngineCallStats|durationMs|fastestMs/)
 })
+
+// Phase 3 audit finding: the "zero successful engine answers" failure path
+// used to interpolate the raw per-engine error text directly into the
+// value returned here, which becomes BOTH the persisted `error_message`
+// column AND (unsanitized) GET /api/grader/report/[id]'s public `error`
+// field, rendered verbatim by ReportView.tsx's failed-status page. Fixed
+// to always return a fixed, safe string; the real reason is still fully
+// visible server-side via console.error.
+test('the all-engines-failed path never returns raw per-engine error text as the public/persisted error', () => {
+  const source = read('lib/grader/analyzer.ts')
+  assert.doesNotMatch(
+    source,
+    /error:\s*`Analysis could not be completed:\s*\$\{sampleError\}`/,
+    'the failed-run error must not interpolate raw provider/engine error text'
+  )
+  assert.match(source, /console\.error\(`\[grader\/analyzer\][^`]*\$\{sampleError\}/, 'the real reason must still be logged server-side')
+  assert.match(source, /error:\s*'We could not complete this analysis\. Please try again in a moment\.'/)
+})

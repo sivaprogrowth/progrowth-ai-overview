@@ -52,6 +52,15 @@ export function GraderForm() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    // Belt-and-suspenders (Phase 3, Task 13): once `submitting` is true this
+    // component renders AnalysisState instead of the form, so the submit
+    // button is normally already gone — this guard only matters for the
+    // narrow window between two rapid submit events (e.g. mashing Enter)
+    // landing before React has flushed that state change. The server-side
+    // duplicate-submission guard (lib/grader/rate-limit.ts) remains the
+    // real backstop regardless; this is additional UX protection, not a
+    // replacement for it.
+    if (submitting) return
     const validationErrors = validateGraderForm(form)
     setErrors(validationErrors)
     if (Object.keys(validationErrors).length > 0) return

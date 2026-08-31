@@ -12,6 +12,12 @@
  *     actual dollar spend/cap from a DataForSeoCapExceededError.
  *   - `queries[].per[].error` / `.costUsd` — same class of leak, scoped to
  *     one engine answer.
+ *   - `readiness.error` — same class of leak as sentiment.error below
+ *     (lib/grader/readiness.ts's catch-block `e.message`, which can carry a
+ *     raw fetch/network exception message). Found during the Phase 3 audit:
+ *     this file already nulled `sentiment.error` but had never done the
+ *     same for `readiness.error`, and components/grader/ReadinessChecklist.tsx
+ *     renders it directly into the page whenever readiness is 'unavailable'.
  *
  * Neither `usage` nor `warnings` is read by any Phase 2 UI component
  * (verified by grep — grep -rn '\.warnings\b|\.usage\b' components/grader
@@ -62,7 +68,7 @@ export function toPublicGraderReport(report: GraderReport): PublicGraderReport {
     competitors: report.competitors,
     citations: report.citations,
     sentiment: { ...report.sentiment, error: null },
-    readiness: report.readiness,
+    readiness: { ...report.readiness, error: null },
     recommendations: report.recommendations,
     summary: report.summary,
     // `usage` and `warnings` are intentionally absent — see the module

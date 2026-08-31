@@ -51,7 +51,15 @@ export function CitationSources({ citations, domain }: { citations: CitationSumm
             <li key={d.domain} className="flex items-center gap-4">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-semibold" style={{ wordBreak: 'break-word' }}>
+                  {/* Phase 3 fix: `truncate` sets white-space:nowrap, which
+                      silently defeated wrappableDomain's zero-width break
+                      points (nowrap suppresses ALL line breaks, including
+                      at those points) — a long domain would ellipsis
+                      rather than wrap, making the helper's output inert.
+                      Wrapping (not truncating) is the better outcome here
+                      anyway: it keeps the full domain, including the TLD,
+                      visible instead of hiding the end of it. */}
+                  <span className="text-sm font-semibold" style={{ wordBreak: 'break-word' }} title={d.owned ? domain : d.domain}>
                     {d.owned ? domain : wrappableDomain(d.domain)}
                   </span>
                   {d.owned && <Pill tone="accent">Your website</Pill>}

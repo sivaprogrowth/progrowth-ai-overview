@@ -36,7 +36,7 @@ export function GraderHero() {
         className="mx-auto mt-6 max-w-2xl text-base leading-relaxed sm:text-lg"
         style={{ color: 'var(--grader-subtle-foreground)' }}
       >
-        Discover how visible your company is across leading AI answer engines, which
+        See how your brand appears across ChatGPT, Perplexity, and Claude, which
         competitors are being recommended instead, where AI systems get their
         information, and what you can do to improve your visibility.
       </p>

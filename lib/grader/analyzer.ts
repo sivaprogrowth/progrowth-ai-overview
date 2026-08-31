@@ -153,11 +153,24 @@ export async function runGraderAnalysis(
     // is a deliberate latency choice: there is no report to attach a
     // readiness result to in this branch anyway.
     readinessPromise.then(() => logGraderTiming(reportId, 'readiness', Date.now() - readinessStartedAt))
+    // Phase 3 fix: this used to interpolate the raw per-engine error text
+    // (`sampleError`) directly into the value returned here — which
+    // becomes BOTH the persisted `error_message` column AND, unsanitized,
+    // GET /api/grader/report/[id]'s public `error` field (rendered
+    // verbatim on the failed-report page by ReportView.tsx). A raw
+    // EngineAnswer.error can carry a provider HTTP response body (see
+    // lib/dataforseo.ts's dfsPost: `failed (${res.status}): ${text}`) or a
+    // raw fetch/network error message — exactly the "provider stack
+    // traces / raw provider errors" a public caller must never see. The
+    // real reason is still fully visible server-side (log line below),
+    // matching the existing pattern for other provider-detail leaks (see
+    // DataForSeoCapExceededError's handling in lib/grader/dataforseo.ts).
     const sampleError = answers.find((a) => a.error)?.error ?? 'no answer engine returned a usable response'
+    console.error(`[grader/analyzer] ${reportId} every engine call failed — sample: ${sampleError}`)
     return {
       status: 'failed',
       report: null,
-      error: `Analysis could not be completed: ${sampleError}`,
+      error: 'We could not complete this analysis. Please try again in a moment.',
     }
   }
   for (const failed of answers.filter((a) => a.error !== null)) {

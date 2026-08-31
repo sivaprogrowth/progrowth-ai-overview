@@ -84,6 +84,32 @@ test('toPublicGraderReport clears sentiment.error', () => {
   assert.equal(pub.sentiment.error, null)
 })
 
+// Phase 3 audit finding: readiness.error was passed through unsanitized
+// (unlike sentiment.error, just above) and is rendered directly by
+// components/grader/ReadinessChecklist.tsx whenever status is
+// 'unavailable' — a raw lib/grader/readiness.ts exception message could
+// reach the public page. Fixed to match the existing sentiment.error
+// treatment exactly.
+test('toPublicGraderReport clears readiness.error', () => {
+  const report = baseReport({
+    readiness: { status: 'unavailable', checks: [], passedCount: 0, evaluatedCount: 0, error: 'TypeError: fetch failed at internal socket layer' },
+  })
+  const pub = toPublicGraderReport(report)
+  assert.equal(pub.readiness.error, null)
+})
+
+test('toPublicGraderReport preserves readiness.status/checks/counts untouched', () => {
+  const checks = [{ id: 'homepage_reachable', label: 'Homepage reachable', passed: true, detail: 'HTTP 200' }]
+  const report = baseReport({
+    readiness: { status: 'partial', checks, passedCount: 1, evaluatedCount: 1, error: 'some internal detail' },
+  })
+  const pub = toPublicGraderReport(report)
+  assert.equal(pub.readiness.status, 'partial')
+  assert.deepEqual(pub.readiness.checks, checks)
+  assert.equal(pub.readiness.passedCount, 1)
+  assert.equal(pub.readiness.evaluatedCount, 1)
+})
+
 test('toPublicGraderReport leaves score/competitors/citations/recommendations/summary untouched', () => {
   const report = baseReport({
     competitors: [{ name: 'Beta', mentions: 3, queriesPresent: 2, shareOfVoice: 20 }],
