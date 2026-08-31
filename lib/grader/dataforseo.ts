@@ -26,8 +26,12 @@ import {
   DataForSeoCapExceededError,
 } from '../dataforseo'
 import { extractBrandCandidates } from './competitors'
+import { summarizeEngineCallStats } from './engine-stats'
 import type { BrandMatcher } from './brand-matcher'
 import type { CitationRef, EngineAnswer, GraderEngine } from './types'
+import type { CallTiming, EngineCallStats } from './engine-stats'
+
+export type { EngineCallStats } from './engine-stats'
 
 /** Non-content annotation targets DataForSEO/vertex sometimes injects. */
 function isRealCitationUrl(url: string): boolean {
@@ -135,6 +139,11 @@ export async function fetchGraderAnswer(
 /** All three answer engines the grader queries for Phase 1. */
 export const GRADER_ENGINES: GraderEngine[] = ['chatgpt', 'perplexity', 'claude']
 
+export interface FanOutResult {
+  answers: EngineAnswer[]
+  engineStats: EngineCallStats[]
+}
+
 /**
  * Fetch every (query, engine) pair with bounded concurrency and an overall
  * wall-clock deadline. Each pair is independently caught inside
@@ -151,18 +160,25 @@ export const GRADER_ENGINES: GraderEngine[] = ['chatgpt', 'perplexity', 'claude'
  * settle in the background (they cannot be cancelled — DataForSEO may
  * still bill them) and every pair that hasn't produced a result yet is
  * filled with a timeout EngineAnswer so the array stays complete.
+ *
+ * `concurrency` is a plain worker-pool size shared across ALL engines, not
+ * per-engine — `pairs` interleaves (query, engine) combinations in a single
+ * flat queue, so at concurrency 4 a moment in time might be running, say,
+ * 2 ChatGPT calls, 1 Perplexity call and 1 Claude call, or any other mix;
+ * nothing pins a worker to one engine (Phase 1 performance audit §7).
  */
 export async function fetchAllGraderAnswers(
   queries: string[],
   matcher: BrandMatcher,
   opts: { concurrency?: number; engines?: GraderEngine[]; deadlineMs?: number } = {}
-): Promise<EngineAnswer[]> {
+): Promise<FanOutResult> {
   const engines = opts.engines ?? GRADER_ENGINES
   const pairs: Array<{ query: string; engine: GraderEngine }> = []
   for (const query of queries) for (const engine of engines) pairs.push({ query, engine })
 
   const concurrency = Math.max(1, opts.concurrency ?? 4)
   const results: EngineAnswer[] = new Array(pairs.length)
+  const timings: Array<CallTiming | undefined> = new Array(pairs.length)
   const settled: boolean[] = new Array(pairs.length).fill(false)
   let cursor = 0
   let deadlineHit = false
@@ -171,7 +187,9 @@ export async function fetchAllGraderAnswers(
     while (!deadlineHit) {
       const i = cursor++
       if (i >= pairs.length) return
+      const startedAt = Date.now()
       results[i] = await fetchGraderAnswer(pairs[i].query, pairs[i].engine, matcher)
+      timings[i] = { engine: pairs[i].engine, startedAt, finishedAt: Date.now() }
       settled[i] = true
     }
   }
@@ -200,5 +218,5 @@ export async function fetchAllGraderAnswers(
     }
   }
 
-  return results
+  return { answers: results, engineStats: summarizeEngineCallStats(pairs, results, timings, engines) }
 }

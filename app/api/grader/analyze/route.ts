@@ -31,6 +31,7 @@ import { clientKeyFromHeaders, isRateLimited, isDuplicateSubmission } from '@/li
 import { checkGraderDailyBudget, BUDGET_EXHAUSTED_MESSAGE } from '@/lib/grader/spend-guard'
 import { assertGraderEnv, GraderEnvError } from '@/lib/grader/env'
 import { categorizeFailure } from '@/lib/grader/error-category'
+import { logGraderTiming, timedStage } from '@/lib/grader/timing'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -39,6 +40,12 @@ export const maxDuration = 300
 const MAX_BODY_BYTES = 10_000
 
 export async function POST(req: NextRequest) {
+  // Phase 1 performance work: `total` spans the entire request, including
+  // the pieces before a reportId exists — logged under 'pending' until a
+  // row is created, matching lib/grader/analyzer.ts's own 'unknown'
+  // placeholder for the same reason (never blocks on having an id).
+  const requestStartedAt = Date.now()
+
   try {
     assertGraderEnv()
   } catch (e) {
@@ -75,6 +82,7 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     )
   }
+  logGraderTiming('pending', 'input-validation', Date.now() - requestStartedAt)
 
   // Task 14 — same client, same domain, within a short window: almost
   // certainly a double-click/refresh, not a genuine second request.
@@ -88,7 +96,7 @@ export async function POST(req: NextRequest) {
   // Task 10 — the grader's own budget ceiling, checked BEFORE any row is
   // created or any DataForSEO cost is spent. Never reveals the limit or
   // count to the caller (BUDGET_EXHAUSTED_MESSAGE is fixed and generic).
-  const budget = await checkGraderDailyBudget(countGraderRunsSince)
+  const budget = await timedStage('pending', 'daily-budget-check', () => checkGraderDailyBudget(countGraderRunsSince))
   if (!budget.allowed) {
     console.warn(`[grader/analyze] daily budget exhausted: ${budget.runsToday}/${budget.limit} runs today`)
     return NextResponse.json({ error: BUDGET_EXHAUSTED_MESSAGE }, { status: 503 })
@@ -96,7 +104,7 @@ export async function POST(req: NextRequest) {
 
   let reportId: string
   try {
-    const run = await createGraderRun(normalized.value)
+    const run = await timedStage('pending', 'grader-row-creation', () => createGraderRun(normalized.value))
     reportId = run.reportId
   } catch (e) {
     console.error('[grader/analyze] failed to create run:', e instanceof Error ? e.message : e)
@@ -107,8 +115,8 @@ export async function POST(req: NextRequest) {
   console.log(`[grader/analyze] ${reportId} start domain=${normalized.value.domain}`)
 
   try {
-    const outcome = await runGraderAnalysis(normalized.value)
-    await completeGraderRun(reportId, outcome.status, outcome.report, outcome.error)
+    const outcome = await runGraderAnalysis(normalized.value, reportId)
+    await timedStage(reportId, 'persist', () => completeGraderRun(reportId, outcome.status, outcome.report, outcome.error))
 
     console.log(
       `[grader/analyze] ${reportId} ${outcome.status} domain=${normalized.value.domain} ` +
@@ -117,6 +125,7 @@ export async function POST(req: NextRequest) {
         `llmCalls=${outcome.report?.usage.llmCalls ?? 0} durationMs=${Date.now() - startedAt}` +
         (outcome.status === 'failed' ? ` failureCategory=${categorizeFailure(outcome.error)}` : '')
     )
+    logGraderTiming(reportId, 'total', Date.now() - requestStartedAt)
 
     if (outcome.status === 'failed') {
       return NextResponse.json({ reportId, status: outcome.status, error: outcome.error }, { status: 200 })
@@ -134,6 +143,7 @@ export async function POST(req: NextRequest) {
     } catch (persistErr) {
       console.error(`[grader/analyze] ${reportId} ALSO failed to persist failure:`, persistErr)
     }
+    logGraderTiming(reportId, 'total', Date.now() - requestStartedAt)
     return NextResponse.json(
       { reportId, status: 'failed', error: 'Analysis could not be completed.' },
       { status: 200 }

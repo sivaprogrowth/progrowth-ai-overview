@@ -6,11 +6,12 @@
  *   validate/normalize (caller — lib/grader/normalize.ts, already done by
  *                        the time this runs)
  *   → generate queries
- *   → run DataForSEO (3 answer engines × N queries)
+ *   → run DataForSEO (3 answer engines × N queries)      ─┐
+ *                                                          ├─ concurrent (Phase 1 perf work)
+ *   → run readiness checks                                ┘
  *   → normalize results
  *   → analyze brand visibility / discover competitors / analyze citations
  *   → run sentiment
- *   → run readiness checks
  *   → calculate scores
  *   → generate recommendations
  *   → generate summary
@@ -22,10 +23,26 @@
  * sub-check as absent evidence (see readiness.ts / sentiment.ts). The run
  * only fails outright when NO engine produced a single usable answer, i.e.
  * there is no report to show at all.
+ *
+ * PHASE 1 PERFORMANCE NOTE: AI readiness (three fetches against the
+ * company's OWN site) has zero data dependency on the DataForSEO answers —
+ * it only needs `input.homepageUrl` and `matcher`, both available before a
+ * single query is even generated. The original implementation still
+ * awaited it strictly after the entire DataForSEO fan-out finished, adding
+ * its full duration on top of the fan-out's instead of overlapping with it.
+ * It is now started immediately (right after the matcher is built) and only
+ * AWAITED later, at the exact point in this function where its result was
+ * already being consumed before — so the `warnings`/status logic below is
+ * byte-for-byte unchanged; only the wall-clock moment the underlying
+ * fetches actually run has moved earlier. See lib/grader/timing.ts for the
+ * `[grader:timing]` stage logs this produces, and the Phase 1 performance
+ * report for measured before/after numbers.
  */
 
 import { createBrandMatcher } from './brand-matcher'
 import { fetchAllGraderAnswers, GRADER_ENGINES } from './dataforseo'
+import { getGraderProviderConcurrency } from './concurrency'
+import { logGraderTiming, timedStage, timedSyncStage } from './timing'
 import { generateQueries } from './query-generator'
 import { buildQueryResults } from './query-results'
 import { aggregateCitations } from './citations'
@@ -35,16 +52,13 @@ import { auditGraderReadiness } from './readiness'
 import { computeScore } from './scoring'
 import { buildGraderRecommendations } from './recommendations'
 import { buildExecutiveSummary } from './summary'
-import type { GraderReport, GraderRunStatus, NormalizedGraderInput } from './types'
+import type { GraderReport, GraderRunStatus, NormalizedGraderInput, ReadinessResult } from './types'
 
 export interface AnalysisOutcome {
   status: Extract<GraderRunStatus, 'completed' | 'partial' | 'failed'>
   report: GraderReport | null
   error: string | null
 }
-
-/** Bounded concurrency across the (query × engine) fan-out — see lib/grader/dataforseo.ts. */
-const ANSWER_CONCURRENCY = 4
 
 /**
  * Wall-clock budget for the answer-engine fan-out. POST /api/grader/analyze
@@ -62,21 +76,62 @@ const ANSWER_CONCURRENCY = 4
  */
 const ANSWER_DEADLINE_MS = 230_000
 
-export async function runGraderAnalysis(input: NormalizedGraderInput): Promise<AnalysisOutcome> {
+/**
+ * `reportId` is used ONLY to correlate `[grader:timing]` log lines with the
+ * Supabase row the caller already created — it is not otherwise read, so a
+ * caller/test invoking this without one (the pre-Phase-1 signature) still
+ * gets fully correct behavior, just with `reportId=unknown` in the logs.
+ */
+export async function runGraderAnalysis(
+  input: NormalizedGraderInput,
+  reportId = 'unknown'
+): Promise<AnalysisOutcome> {
   const startedAt = Date.now()
   const warnings: string[] = []
   const matcher = createBrandMatcher({ companyName: input.companyName, domain: input.domain })
 
+  // ── AI readiness — started NOW, not after the fan-out below (see the
+  // PHASE 1 PERFORMANCE NOTE above). `.catch()` is attached at creation, not
+  // at the `await` site, so this can never produce an unhandled-rejection
+  // warning regardless of which code path below ends up consuming it (the
+  // early 'failed' return never awaits it at all) — and a secondary
+  // readiness failure can never reject this Promise.all-adjacent branch and
+  // take the primary DataForSEO analysis down with it (Task 6).
+  // auditGraderReadiness's own contract already says it never throws; this
+  // is a second, independent safety net at the join point in case that
+  // contract is ever violated by a future change.
+  const readinessStartedAt = Date.now()
+  const readinessPromise: Promise<ReadinessResult> = auditGraderReadiness(input.homepageUrl, matcher).catch(
+    (e): ReadinessResult => ({
+      status: 'unavailable',
+      checks: [],
+      passedCount: 0,
+      evaluatedCount: 0,
+      error: e instanceof Error ? e.message : 'readiness check failed unexpectedly',
+    })
+  )
+
   // ── 1. Query generation (never throws — template set alone is complete) ──
-  const queryPlan = await generateQueries(input)
+  const queryPlan = await timedStage(reportId, 'query-generation', () => generateQueries(input))
   if (queryPlan.warning) warnings.push(queryPlan.warning)
 
   // ── 2. Answer-engine fan-out ──────────────────────────────────────────
-  const answers = await fetchAllGraderAnswers(
-    queryPlan.queries.map((q) => q.query),
-    matcher,
-    { concurrency: ANSWER_CONCURRENCY, engines: GRADER_ENGINES, deadlineMs: ANSWER_DEADLINE_MS }
+  const concurrency = getGraderProviderConcurrency()
+  const { answers, engineStats } = await timedStage(reportId, 'dataforseo-fanout', () =>
+    fetchAllGraderAnswers(
+      queryPlan.queries.map((q) => q.query),
+      matcher,
+      { concurrency, engines: GRADER_ENGINES, deadlineMs: ANSWER_DEADLINE_MS }
+    )
   )
+  for (const stats of engineStats) {
+    console.log(
+      `[grader:timing] reportId=${reportId} stage=engine-${stats.engine} ` +
+        `attempted=${stats.attempted} succeeded=${stats.succeeded} failed=${stats.failed} ` +
+        `fastestMs=${stats.fastestMs ?? 'n/a'} slowestMs=${stats.slowestMs ?? 'n/a'} ` +
+        `avgMs=${stats.avgMs ?? 'n/a'} wallClockSpanMs=${stats.wallClockSpanMs ?? 'n/a'}`
+    )
+  }
 
   // ── completed / partial / failed policy (Phase 3, Task 18) ──────────────
   // failed:    not enough core analysis exists for a meaningful report —
@@ -92,6 +147,12 @@ export async function runGraderAnalysis(input: NormalizedGraderInput): Promise<A
   //            successively broader definition of "still a real report."
   const succeeded = answers.filter((a) => a.error === null)
   if (succeeded.length === 0) {
+    // Readiness is already running (or done) in the background regardless —
+    // log its timing when it settles, but don't make a fast, fully-failed
+    // run (e.g. every call cap-exceeded instantly) wait around for it. This
+    // is a deliberate latency choice: there is no report to attach a
+    // readiness result to in this branch anyway.
+    readinessPromise.then(() => logGraderTiming(reportId, 'readiness', Date.now() - readinessStartedAt))
     const sampleError = answers.find((a) => a.error)?.error ?? 'no answer engine returned a usable response'
     return {
       status: 'failed',
@@ -104,46 +165,58 @@ export async function runGraderAnalysis(input: NormalizedGraderInput): Promise<A
   }
 
   // ── 3. Per-query rollup ────────────────────────────────────────────────
-  const queryResults = buildQueryResults(queryPlan.queries, answers, matcher)
+  const queryResults = timedSyncStage(reportId, 'query-rollup', () => buildQueryResults(queryPlan.queries, answers, matcher))
 
   // ── 4. Citations ───────────────────────────────────────────────────────
-  const citations = aggregateCitations(answers, matcher)
+  const citations = timedSyncStage(reportId, 'citation-aggregation', () => aggregateCitations(answers, matcher))
 
   // ── 5. Competitors ─────────────────────────────────────────────────────
   const brandMentionCount = answers.filter((a) => a.error === null && a.brandMentioned).length
-  const { competitors, totalCompetitorMentions } = aggregateCompetitors(answers, brandMentionCount)
+  const { competitors, totalCompetitorMentions } = timedSyncStage(reportId, 'competitor-extraction', () =>
+    aggregateCompetitors(answers, brandMentionCount)
+  )
 
   // ── 6. Sentiment (secondary — can degrade to 'unknown', never throws) ──
-  const sentiment = summarizeSentiment(answers, matcher)
+  const sentiment = timedSyncStage(reportId, 'sentiment', () => summarizeSentiment(answers, matcher))
   if (sentiment.error) warnings.push(`sentiment: ${sentiment.error}`)
 
   // ── 7. AI readiness (secondary — degrades to partial/unavailable) ──────
-  const readiness = await auditGraderReadiness(input.homepageUrl, matcher)
+  // Initiated above, before query generation — this `await` almost always
+  // resolves immediately here since the DataForSEO fan-out (steps above)
+  // typically takes far longer than the three lightweight fetches readiness
+  // runs. Consumption point and warnings logic are UNCHANGED from before
+  // Phase 1: only the moment the underlying fetches started has moved.
+  const readiness = await readinessPromise
+  logGraderTiming(reportId, 'readiness', Date.now() - readinessStartedAt)
   if (readiness.error) warnings.push(`readiness: ${readiness.error}`)
   if (readiness.status !== 'ok') {
     warnings.push(`readiness: ${readiness.status} (${readiness.evaluatedCount}/${readiness.checks.length} checks evaluated)`)
   }
 
   // ── 8. Deterministic scoring ────────────────────────────────────────────
-  const score = computeScore({
-    queries: queryResults,
-    citations,
-    sentiment,
-    competitors,
-    brandMentionCount,
-    totalCompetitorMentions,
-    readiness,
-  })
+  const score = timedSyncStage(reportId, 'scoring', () =>
+    computeScore({
+      queries: queryResults,
+      citations,
+      sentiment,
+      competitors,
+      brandMentionCount,
+      totalCompetitorMentions,
+      readiness,
+    })
+  )
 
   // ── 9. Recommendations ──────────────────────────────────────────────────
-  const recommendations = buildGraderRecommendations({
-    score,
-    queries: queryResults,
-    citations,
-    competitors,
-    readiness,
-    companyName: input.companyName,
-  })
+  const recommendations = timedSyncStage(reportId, 'recommendations', () =>
+    buildGraderRecommendations({
+      score,
+      queries: queryResults,
+      citations,
+      competitors,
+      readiness,
+      companyName: input.companyName,
+    })
+  )
 
   // ── 10. Executive summary ───────────────────────────────────────────────
   const company = {
@@ -153,7 +226,9 @@ export async function runGraderAnalysis(input: NormalizedGraderInput): Promise<A
     service: input.service,
     location: input.location,
   }
-  const summaryResult = await buildExecutiveSummary({ company, score, queries: queryResults, competitors })
+  const summaryResult = await timedStage(reportId, 'summary', () =>
+    buildExecutiveSummary({ company, score, queries: queryResults, competitors })
+  )
   if (summaryResult.warning) warnings.push(summaryResult.warning)
 
   // ── Usage / cost ─────────────────────────────────────────────────────────
@@ -189,5 +264,6 @@ export async function runGraderAnalysis(input: NormalizedGraderInput): Promise<A
   const status: AnalysisOutcome['status'] =
     failedAnswers > 0 || readiness.status !== 'ok' || sentiment.error ? 'partial' : 'completed'
 
+  logGraderTiming(reportId, 'total-analysis', Date.now() - startedAt)
   return { status, report, error: null }
 }
