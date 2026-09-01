@@ -17,7 +17,7 @@ const PROGROWTH_URL = 'https://progrowth.services'
 
 export function ReportCTA() {
   return (
-    <div className="grader-glow-ambient border-t" style={{ borderColor: 'var(--grader-border)' }}>
+    <div>
       <div className="mx-auto max-w-3xl px-4 py-20 text-center sm:px-6 sm:py-28 lg:px-8">
         <p className="mb-4 text-xs font-bold uppercase tracking-[0.25em]" style={{ color: 'var(--grader-accent-soft)' }}>
           Ready When You Are
