@@ -32,6 +32,7 @@ import { checkGraderDailyBudget, BUDGET_EXHAUSTED_MESSAGE } from '@/lib/grader/s
 import { assertGraderEnv, GraderEnvError } from '@/lib/grader/env'
 import { categorizeFailure } from '@/lib/grader/error-category'
 import { logGraderTiming, timedStage } from '@/lib/grader/timing'
+import { requireValidProelevateAuthOrPublic } from '@/lib/grader/api-auth'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -40,6 +41,15 @@ export const maxDuration = 300
 const MAX_BODY_BYTES = 10_000
 
 export async function POST(req: NextRequest) {
+  // grader-api: checked before ANY other work, including the env check
+  // below — a caller presenting a bad token gets rejected before this
+  // route does anything else, paid or not. A caller presenting NO token
+  // (every request the public site itself sends) passes straight through
+  // to the existing behavior below, completely unaffected. See
+  // lib/grader/api-auth.ts for the full design rationale.
+  const authError = requireValidProelevateAuthOrPublic(req.headers)
+  if (authError) return authError
+
   // Phase 1 performance work: `total` spans the entire request, including
   // the pieces before a reportId exists — logged under 'pending' until a
   // row is created, matching lib/grader/analyzer.ts's own 'unknown'

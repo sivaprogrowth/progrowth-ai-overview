@@ -62,6 +62,41 @@ Email OTP via Brevo → 6-digit code → HMAC-signed session cookie (30-day sess
 - `clients/`, `clients/[slug]`, `clients/[slug]/trigger`, `clients/generate-prompts` — tenant + prompt generation
 - `analyses/`, `scorecard/`, `matomo/kpi`, `matomo/crawls`
 - `cron/` — `ai-readiness`, `citation-network`, `geo-seo-gap`, `matomo-analysis`, `sentiment`
+- `grader/analyze`, `grader/report/[id]`, `grader/lead` — public AI Grader (see below)
+
+## AEO Grader API (for ProElevate server-to-server integration)
+
+Public, no session cookie required. `analyze` and `report/[id]` additionally
+accept an optional `Authorization: Bearer <PROELEVATE_API_KEY>` header — see
+`lib/grader/api-auth.ts`. **No token is required for these to keep working**:
+the live public grader website (`components/grader/GraderForm.tsx`,
+`ReportView.tsx`) calls them from the browser with no header today and
+always will, so a missing token is treated as an ordinary public request,
+governed by the same rate limit / duplicate-submission guard / daily run
+cap as before. A *wrong* token (one that's present but doesn't match) is
+rejected with `401 Unauthorized` before any other work runs.
+
+**`POST /api/grader/analyze`**
+- Body (JSON): `domain` (required), `companyName` (required), `industry` (required), `service` (optional), `location` (optional) — see `lib/grader/normalize.ts` for exact field limits/rules.
+- Auth: optional Bearer token (see above).
+- Success: `200 { reportId, status }` where `status` is `completed` / `partial` / `failed`. A `failed` status still returns `200` with a sanitized `error` string — nothing is thrown to the transport layer for an ordinary failed analysis.
+- Validation failure: `400 { error: 'Invalid input', issues: [...] }`.
+- Auth failure (bad token presented): `401 { error: 'Unauthorized' }`.
+- Rate-limited / duplicate submission: `429 { error }`.
+- Daily run cap reached: `503 { error }` (fixed, generic message — never reveals the configured limit).
+- Runs synchronously; takes roughly 40–130 seconds (`maxDuration: 300` in `vercel.json`).
+
+**`GET /api/grader/report/[id]`**
+- Path param: `id` — a UUID.
+- Auth: optional Bearer token (see above).
+- Success (`completed`/`partial`): `200 { reportId, status, report }` — `report` is the sanitized `PublicGraderReport` shape from `lib/grader/public-report.ts` (no cost, no raw provider error text).
+- Still processing: `200 { reportId, status: 'processing' }`.
+- Failed: `200 { reportId, status: 'failed', error }`.
+- Invalid id format: `400 { error: 'Invalid report id' }`.
+- Not found: `404 { error: 'Report not found' }`.
+- Auth failure (bad token presented): `401 { error: 'Unauthorized' }`.
+
+No CORS headers are configured for either route, deliberately — the intended ProElevate integration is server-to-server (ProElevate's own backend calling these URLs directly, not a browser on a different origin), which needs none. Add CORS only if a genuine browser-to-grader cross-origin call becomes a real requirement.
 
 ## Cron Jobs (`vercel.json`)
 
@@ -87,6 +122,7 @@ Set in `.env.local` (dev) and on Vercel (production):
 | `CRON_SECRET` | Protects cron endpoints |
 | `BATCH_API_KEY` | Protects batch analyze endpoint |
 | `DIGEST_EMAIL_RECIPIENT` | Scorecard digest recipient |
+| `PROELEVATE_API_KEY` | Optional — authenticates ProElevate's server for `grader/analyze` \| `grader/report/[id]` (see AEO Grader API section above). Unset by default; the public grader website works identically either way. |
 
 ## Deployment
 
