@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import ClientSwitcher from "@/components/ClientSwitcher";
-import LogoutButton from "@/components/LogoutButton";
+import InternalChrome from "@/components/InternalChrome";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -31,11 +30,9 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         {/* Floating client switcher — hidden when only the default client
-            exists, so single-tenant usage stays unchanged. */}
-        <div className="fixed top-3 right-4 z-50 flex items-center gap-2">
-          <ClientSwitcher />
-          <LogoutButton />
-        </div>
+            exists, so single-tenant usage stays unchanged. Also hidden
+            entirely on /grader/* — see components/InternalChrome.tsx. */}
+        <InternalChrome />
         {children}
       </body>
     </html>

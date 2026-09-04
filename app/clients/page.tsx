@@ -47,7 +47,7 @@ export default async function ClientsPage() {
               Citation Network
             </Link>
             <Link
-              href="/"
+              href="/dashboard"
               className="text-gray-400 hover:text-lime-400 underline-offset-2 hover:underline"
             >
               ← Overview Analysis

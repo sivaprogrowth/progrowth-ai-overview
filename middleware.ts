@@ -34,6 +34,19 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next()
   }
 
+  // ProGrowth AI Grader — a separate, intentionally PUBLIC product surface.
+  // ONLY these three exact routes are exposed with no auth. This is a
+  // narrow allowlist, not a `/api/grader/` prefix match, so any future
+  // internal grader route (an admin view, a cost dashboard, …) stays
+  // behind the session/Bearer checks below by default.
+  if (
+    pathname === '/api/grader/analyze' ||
+    pathname === '/api/grader/lead' ||
+    pathname.startsWith('/api/grader/report/')
+  ) {
+    return NextResponse.next()
+  }
+
   // Allow batch/matomo/cron routes with Bearer token
   if (
     pathname.startsWith('/api/analyze/batch') ||
@@ -63,7 +76,14 @@ export async function middleware(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // For page routes, let the client-side handle showing login
+  // For page routes, let the client-side handle showing login. This is
+  // also why `/` needs no special case here to reach the public grader:
+  // page routes have always passed through middleware regardless of
+  // session (auth for pages is client-side, not middleware-enforced) —
+  // `app/page.tsx` itself does a server-side redirect('/grader'), and the
+  // internal product's own login/dashboard flow moved, unchanged, to
+  // `/dashboard` (still just as unprotected here, and just as gated by
+  // its own client-side session check as `/` used to be).
   return NextResponse.next()
 }
 
