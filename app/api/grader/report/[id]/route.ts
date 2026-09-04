@@ -9,10 +9,18 @@ import { getGraderRun } from '@/lib/grader/store'
 import { isValidReportId } from '@/lib/grader/ids'
 import { withStaleProcessingRecovery } from '@/lib/grader/stale-processing'
 import { toPublicGraderReport } from '@/lib/grader/public-report'
+import { requireValidProelevateAuthOrPublic } from '@/lib/grader/api-auth'
 
 export const runtime = 'nodejs'
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  // grader-api: same optional-Bearer design as the analyze route — see
+  // lib/grader/api-auth.ts. A caller presenting a bad token is rejected
+  // before the Supabase lookup below; the existing public report-sharing
+  // flow (no token at all) is completely unaffected.
+  const authError = requireValidProelevateAuthOrPublic(req.headers)
+  if (authError) return authError
+
   const { id } = params
   if (!isValidReportId(id)) {
     return NextResponse.json({ error: 'Invalid report id' }, { status: 400 })
