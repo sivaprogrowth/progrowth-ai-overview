@@ -60,8 +60,6 @@ test('buildGraderRecommendations returns 3-5 recommendations for a weak report',
     citations: emptyCitations,
     sentiment: unknownSentiment,
     competitors: [],
-    brandMentionCount: 0,
-    totalCompetitorMentions: 0,
     readiness: unavailableReadiness,
   })
   const recs = buildGraderRecommendations({
@@ -83,8 +81,6 @@ test('buildGraderRecommendations sorts by priority (high before medium before lo
     citations: emptyCitations,
     sentiment: unknownSentiment,
     competitors: [],
-    brandMentionCount: 0,
-    totalCompetitorMentions: 0,
     readiness: unavailableReadiness,
   })
   const recs = buildGraderRecommendations({
@@ -109,8 +105,6 @@ test('buildGraderRecommendations flags a dominant competitor with a comparison-p
     citations: emptyCitations,
     sentiment: unknownSentiment,
     competitors,
-    brandMentionCount: 1,
-    totalCompetitorMentions: 10,
     readiness: unavailableReadiness,
   })
   const recs = buildGraderRecommendations({
@@ -131,8 +125,6 @@ test('buildGraderRecommendations never invents a DEBUNKED_TACTICS-style claim', 
     citations: emptyCitations,
     sentiment: unknownSentiment,
     competitors: [],
-    brandMentionCount: 0,
-    totalCompetitorMentions: 0,
     readiness: unavailableReadiness,
   })
   const recs = buildGraderRecommendations({
@@ -176,8 +168,6 @@ test('buildGraderRecommendations gives a maintain-visibility fallback for a stro
     citations,
     sentiment,
     competitors: [],
-    brandMentionCount: 20,
-    totalCompetitorMentions: 0,
     readiness,
   })
   const recs = buildGraderRecommendations({

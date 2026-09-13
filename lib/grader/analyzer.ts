@@ -185,7 +185,7 @@ export async function runGraderAnalysis(
 
   // ── 5. Competitors ─────────────────────────────────────────────────────
   const brandMentionCount = answers.filter((a) => a.error === null && a.brandMentioned).length
-  const { competitors, totalCompetitorMentions } = timedSyncStage(reportId, 'competitor-extraction', () =>
+  const { competitors } = timedSyncStage(reportId, 'competitor-extraction', () =>
     aggregateCompetitors(answers, brandMentionCount)
   )
 
@@ -213,8 +213,6 @@ export async function runGraderAnalysis(
       citations,
       sentiment,
       competitors,
-      brandMentionCount,
-      totalCompetitorMentions,
       readiness,
     })
   )

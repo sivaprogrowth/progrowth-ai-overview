@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { computeScore } from '../../lib/grader/scoring'
 import type {
   CitationSummary,
-  CompetitorResult,
+  EngineAnswer,
+  GraderEngine,
   QueryAnalysisResult,
   ReadinessResult,
   SentimentSummary,
@@ -23,6 +24,21 @@ function query(overrides: Partial<QueryAnalysisResult>): QueryAnalysisResult {
     citations: [],
     sentiment: 'unknown',
     per: [],
+    ...overrides,
+  }
+}
+
+function answer(engine: GraderEngine, overrides: Partial<EngineAnswer> = {}): EngineAnswer {
+  return {
+    query: 'q',
+    engine,
+    answerText: '',
+    brandMentioned: false,
+    brandPosition: null,
+    competitors: [],
+    citations: [],
+    costUsd: null,
+    error: null,
     ...overrides,
   }
 }
@@ -52,19 +68,26 @@ const unavailableReadiness: ReadinessResult = {
   error: 'homepage unreachable',
 }
 
-test('computeScore is deterministic — same input, same output', () => {
-  const input = {
-    queries: [query({ brandMentioned: true, brandPosition: 1 })],
-    citations: emptyCitations,
+function scoreQueries(queries: QueryAnalysisResult[], citations: CitationSummary = emptyCitations) {
+  return computeScore({
+    queries,
+    citations,
     sentiment: unknownSentiment,
-    competitors: [] as CompetitorResult[],
-    brandMentionCount: 1,
-    totalCompetitorMentions: 0,
+    competitors: [],
     readiness: unavailableReadiness,
-  }
-  const a = computeScore(input)
-  const b = computeScore(input)
-  assert.deepEqual(a, b)
+  })
+}
+
+test('computeScore is deterministic — same input, same output', () => {
+  const queries = [
+    query({
+      brandMentioned: true,
+      brandPosition: 1,
+      enginesMentioning: ['chatgpt'],
+      per: [answer('chatgpt', { brandMentioned: true, brandPosition: 1, competitors: ['Beta'] })],
+    }),
+  ]
+  assert.deepEqual(scoreQueries(queries), scoreQueries(queries))
 })
 
 test('computeScore never exceeds 100 or drops below 0', () => {
@@ -73,11 +96,11 @@ test('computeScore never exceeds 100 or drops below 0', () => {
       query: `q${i}`,
       brandMentioned: true,
       brandPosition: 1,
+      enginesMentioning: ['chatgpt'],
       category: (['category_discovery', 'recommendation_intent', 'brand_evaluation', 'alternatives_comparison'] as const)[i % 4],
-      // Citation-authority coverage is measured per query — an "all
-      // categories, all engines" perfect run also carries a citation on
-      // every answered query, not just at the aggregate citations summary.
+      priority: i % 4 < 2 ? 'high' : 'medium',
       citations: [{ domain: 'acme.com', url: 'https://acme.com', title: null }],
+      per: [answer('chatgpt', { query: `q${i}`, brandMentioned: true, brandPosition: 1 })],
     })
   )
   const perfectCitations: CitationSummary = {
@@ -107,8 +130,6 @@ test('computeScore never exceeds 100 or drops below 0', () => {
     citations: perfectCitations,
     sentiment: perfectSentiment,
     competitors: [],
-    brandMentionCount: 50,
-    totalCompetitorMentions: 0,
     readiness: perfectReadiness,
   })
   assert.ok(score.overall <= 100)
@@ -117,83 +138,126 @@ test('computeScore never exceeds 100 or drops below 0', () => {
 })
 
 test('computeScore returns 0 competitive score with no comparative data at all', () => {
-  const score = computeScore({
-    queries: [query({})],
-    citations: emptyCitations,
-    sentiment: unknownSentiment,
-    competitors: [],
-    brandMentionCount: 0,
-    totalCompetitorMentions: 0,
-    readiness: unavailableReadiness,
-  })
-  assert.equal(score.competitive, 0)
+  assert.equal(scoreQueries([query({})]).competitive, 0)
 })
 
 test('computeScore falls back sentiment to the neutral midpoint when unmeasured', () => {
-  const score = computeScore({
-    queries: [query({})],
-    citations: emptyCitations,
-    sentiment: unknownSentiment,
-    competitors: [],
-    brandMentionCount: 0,
-    totalCompetitorMentions: 0,
-    readiness: unavailableReadiness,
-  })
-  assert.equal(score.sentiment, 7.5)
+  assert.equal(scoreQueries([query({})]).sentiment, 7.5)
 })
 
 test('computeScore gives 0 readiness when evaluatedCount is 0', () => {
-  const score = computeScore({
-    queries: [query({})],
-    citations: emptyCitations,
-    sentiment: unknownSentiment,
-    competitors: [],
-    brandMentionCount: 0,
-    totalCompetitorMentions: 0,
-    readiness: unavailableReadiness,
-  })
-  assert.equal(score.readiness, 0)
+  assert.equal(scoreQueries([query({})]).readiness, 0)
 })
 
 test('computeScore category scores sum to the overall score', () => {
-  const score = computeScore({
-    queries: [query({ brandMentioned: true, brandPosition: 2 })],
-    citations: emptyCitations,
-    sentiment: unknownSentiment,
-    competitors: [],
-    brandMentionCount: 1,
-    totalCompetitorMentions: 1,
-    readiness: unavailableReadiness,
-  })
+  const score = scoreQueries([
+    query({
+      brandMentioned: true,
+      brandPosition: 2,
+      enginesMentioning: ['chatgpt'],
+      per: [answer('chatgpt', { brandMentioned: true, brandPosition: 2, competitors: ['Beta'] })],
+    }),
+  ])
   const sum = score.categories.reduce((s, c) => s + c.score, 0)
   assert.ok(Math.abs(sum - score.overall) < 0.15)
 })
 
 test('computeScore rewards answer coverage breadth, not just mention count', () => {
-  const narrow = computeScore({
-    queries: [
-      query({ query: 'a', category: 'brand_evaluation', brandMentioned: true }),
-      query({ query: 'b', category: 'brand_evaluation', brandMentioned: true }),
-      query({ query: 'c', category: 'category_discovery', brandMentioned: false }),
-    ],
-    citations: emptyCitations,
-    sentiment: unknownSentiment,
-    competitors: [],
-    brandMentionCount: 2,
-    totalCompetitorMentions: 0,
-    readiness: unavailableReadiness,
-  })
-  const broad = computeScore({
-    queries: [
-      query({ query: 'a', category: 'brand_evaluation', brandMentioned: true }),
-      query({ query: 'c', category: 'category_discovery', brandMentioned: true }),
-    ],
-    citations: emptyCitations,
-    sentiment: unknownSentiment,
-    competitors: [],
-    brandMentionCount: 2,
-    totalCompetitorMentions: 0,
-    readiness: unavailableReadiness,
-  })
+  const narrow = scoreQueries([
+    query({ query: 'a', category: 'brand_evaluation', brandMentioned: true, enginesMentioning: ['chatgpt'] }),
+    query({ query: 'b', category: 'brand_evaluation', brandMentioned: true, enginesMentioning: ['chatgpt'] }),
+    query({ query: 'c', category: 'category_discovery', brandMentioned: false }),
+  ])
+  const broad = scoreQueries([
+    query({ query: 'a', category: 'brand_evaluation', brandMentioned: true, enginesMentioning: ['chatgpt'] }),
+    query({ query: 'c', category: 'category_discovery', brandMentioned: true, enginesMentioning: ['chatgpt'] }),
+  ])
   assert.ok(broad.coverage > narrow.coverage)
+})
+
+test('visibility counts each AI answer, not "any engine" per query', () => {
+  const allEngines = ['chatgpt', 'perplexity', 'claude'] as GraderEngine[]
+  const oneOfThree = scoreQueries([
+    query({ brandMentioned: true, enginesAnswered: allEngines, enginesMentioning: ['chatgpt'] }),
+  ])
+  const threeOfThree = scoreQueries([
+    query({ brandMentioned: true, enginesAnswered: allEngines, enginesMentioning: allEngines }),
+  ])
+  // presence 1/3 → 6.7 of 20, high-priority 1/3 → 1.7 of 5
+  assert.equal(oneOfThree.visibility, 8.3)
+  assert.equal(threeOfThree.visibility, 25)
+})
+
+test('citation authority ignores third-party citations and credits only the brand site', () => {
+  const thirdPartyOnly = scoreQueries(
+    [
+      query({
+        citations: [{ domain: 'reviews.example', url: 'https://reviews.example', title: null }],
+        per: [answer('chatgpt', { citations: [{ domain: 'reviews.example', url: 'https://reviews.example', title: null }] })],
+      }),
+    ],
+    { ...emptyCitations, uniqueDomains: 12, totalCitations: 12, thirdPartyShare: 100, thirdPartyDomains: 12 }
+  )
+  assert.equal(thirdPartyOnly.citation, 0)
+
+  // Own site cited in 1 of 2 answers (5 pts) with a 12.5% owned share (5 pts).
+  const halfOwned = scoreQueries(
+    [
+      query({
+        enginesAnswered: ['chatgpt', 'perplexity'],
+        per: [answer('chatgpt', { brandPosition: 1 }), answer('perplexity')],
+      }),
+    ],
+    { ...emptyCitations, totalCitations: 8, ownedShare: 12.5, thirdPartyShare: 87.5 }
+  )
+  assert.equal(halfOwned.citation, 10)
+})
+
+test('failed engine answers never count toward citation or competitive credit', () => {
+  const score = scoreQueries([
+    query({
+      per: [
+        answer('chatgpt', { brandMentioned: true, brandPosition: 1 }),
+        answer('claude', { error: 'timeout', brandPosition: 1, competitors: ['Beta'] }),
+      ],
+    }),
+  ])
+  assert.equal(score.competitive, 15)
+  assert.match(score.categories.find((c) => c.id === 'citation')!.detail, /cited in 1\/1 AI answers/)
+})
+
+test('competitive share ignores branded queries, where the brand is in the question', () => {
+  const score = scoreQueries([
+    query({
+      query: 'acme reviews',
+      category: 'brand_evaluation',
+      priority: 'medium',
+      per: [answer('chatgpt', { brandMentioned: true }), answer('claude', { brandMentioned: true })],
+    }),
+    query({
+      query: 'best insurance',
+      per: [answer('chatgpt', { competitors: ['Beta Insurance'] })],
+    }),
+  ])
+  assert.equal(score.competitive, 0)
+})
+
+test('competitive share compares brand answers with the most-visible competitor', () => {
+  const generic = (per: EngineAnswer[]) => query({ query: 'best insurance', per })
+  const matching = scoreQueries([
+    generic([
+      answer('chatgpt', { brandMentioned: true, competitors: ['Beta'] }),
+      answer('perplexity', { brandMentioned: true, competitors: ['Beta', 'Gamma'] }),
+    ]),
+  ])
+  assert.equal(matching.competitive, 15)
+
+  const half = scoreQueries([
+    generic([
+      answer('chatgpt', { brandMentioned: true, competitors: ['Beta'] }),
+      answer('perplexity', { competitors: ['Beta', 'Gamma'] }),
+    ]),
+  ])
+  assert.equal(half.competitive, 7.5)
+  assert.match(half.categories.find((c) => c.id === 'competitive')!.detail, /vs 2 for the most-visible competitor \(Beta\)/)
 })
