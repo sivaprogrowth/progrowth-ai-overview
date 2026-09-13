@@ -69,17 +69,17 @@ export function buildGraderRecommendations(input: RecommendationInput): Recommen
     })
   }
 
-  // 2. Low citation authority → increase third-party authority presence.
+  // 2. Low citation authority → get the brand's own site cited.
   if (score.citation < 12) {
     push({
       priority: 'high',
       category: 'citations',
-      title: 'Increase third-party citation coverage',
-      reason: `Only ${citations.uniqueDomains} unique domain(s) cited the brand's market and owned-domain citation share is ${citations.ownedShare}% (${score.citation}/20 citation points).`,
+      title: "Get your own site cited in AI answers",
+      reason: `The brand's own site makes up ${citations.ownedShare}% of the ${citations.totalCitations} citation(s) AI answers used (${score.citation}/20 citation points).`,
       action:
-        'Pursue coverage on review platforms, industry directories and comparison publishers relevant to ' +
-        'the industry (e.g. G2/Capterra for software, BBB/industry directories for local services) — these ' +
-        'are the sources answer engines cite most often.',
+        'Publish pages on your own site that directly answer the questions buyers ask — services, pricing, ' +
+        'locations served and FAQs, stated plainly — and keep review-platform and industry-directory profiles ' +
+        'linking back to them, so answer engines cite your site instead of only intermediaries.',
     })
   }
 
