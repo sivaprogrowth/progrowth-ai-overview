@@ -16,6 +16,7 @@
 
 import { type Client, getBrandDomainSet } from './clients'
 import { getClustersForClient } from './prompts'
+import { matomoPost } from './matomo'
 
 const AI_TRAFFIC_TYPE_DIMENSION = '2'
 
@@ -103,7 +104,7 @@ async function matomoCustomDimension(
     `dimension${AI_TRAFFIC_TYPE_DIMENSION}==${encodeURIComponent(dimensionValue)}`
   )
 
-  const res = await fetch(url.toString(), { cache: 'no-store' })
+  const res = await matomoPost(url, { cache: 'no-store' })
   if (!res.ok) throw new Error(`Matomo API error: ${res.status}`)
   const dim2Rows = (await res.json()) as Array<{ label: string; nb_visits: number }>
   const totalRow = dim2Rows.find((r) => r.label === dimensionValue)
@@ -123,7 +124,7 @@ async function matomoCustomDimension(
     `dimension${AI_TRAFFIC_TYPE_DIMENSION}==${encodeURIComponent(dimensionValue)}`
   )
 
-  const engineRes = await fetch(perEngineUrl.toString(), { cache: 'no-store' })
+  const engineRes = await matomoPost(perEngineUrl, { cache: 'no-store' })
   const engineRows = engineRes.ok
     ? ((await engineRes.json()) as Array<{ label: string; nb_visits: number }>)
     : []
@@ -154,7 +155,7 @@ async function matomoVisitCountForRange(
     `dimension${AI_TRAFFIC_TYPE_DIMENSION}==${encodeURIComponent(dimensionValue)}`
   )
 
-  const res = await fetch(url.toString(), { cache: 'no-store' })
+  const res = await matomoPost(url, { cache: 'no-store' })
   if (!res.ok) return 0
   const rows = (await res.json()) as Array<{ label: string; nb_visits: number }>
   return rows.find((r) => r.label === dimensionValue)?.nb_visits ?? 0
@@ -179,7 +180,7 @@ async function matomoWeeklySeries(
     `dimension${AI_TRAFFIC_TYPE_DIMENSION}==${encodeURIComponent(dimensionValue)}`
   )
 
-  const res = await fetch(url.toString(), { cache: 'no-store' })
+  const res = await matomoPost(url, { cache: 'no-store' })
   if (!res.ok) return []
   const data = (await res.json()) as Record<
     string,

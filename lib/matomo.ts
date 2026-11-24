@@ -45,9 +45,24 @@ async function matomoApi(matomoUrl: string, siteId: string, params: Record<strin
     url.searchParams.set(key, value)
   }
 
-  const res = await fetch(url.toString())
+  const res = await matomoPost(url)
   if (!res.ok) throw new Error(`Matomo API error: ${res.status}`)
   return res.json()
+}
+
+/**
+ * Sends a Matomo API request as a POST with every query parameter moved into
+ * the form body. Matomo tokens marked "secure requests only" are rejected when
+ * `token_auth` appears in a GET URL, and a token in the URL also ends up in
+ * access logs.
+ */
+export function matomoPost(url: URL, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${url.origin}${url.pathname}`, {
+    ...init,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: url.searchParams.toString(),
+  })
 }
 
 export async function fetchMatomoCrawls(opts: MatomoFetchOptions): Promise<CrawledPage[]> {
